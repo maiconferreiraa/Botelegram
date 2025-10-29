@@ -1,0 +1,6 @@
+python-telegram-bot
+Flask
+waitress
+matplotlib
+openpyxl
+reportlab
