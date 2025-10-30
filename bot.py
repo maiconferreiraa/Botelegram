@@ -128,7 +128,7 @@ def interpretar_mensagem(texto: str):
 
 
 # ==========================================================
-# --- MODIFICAÇÃO 1: Emojis e Botões do Teclado Flutuante ---
+# --- Teclado Flutuante (Com emojis atualizados) ---
 # ==========================================================
 def teclado_flutuante(user_id):
     entradas = db.get_soma(user_id, "entrada"); gastos = db.get_soma(user_id, "gasto"); saldo = entradas - gastos
@@ -136,7 +136,6 @@ def teclado_flutuante(user_id):
     if saldo < 0: status = "🔴😟 Saldo Negativo"
     elif entradas > 0 and (gastos / entradas) > Decimal("0.7"): status = "🟠🤔 Gastos altos!"
     
-    # Emojis únicos para cada botão
     teclado = [
         [status],
         ["⚖️ Saldo Geral", "💳 Gastos por Cartão"],
@@ -144,10 +143,10 @@ def teclado_flutuante(user_id):
         ["🗓️ Filtrar por Período", "🏷️ Filtrar por Categoria"],
         ["🍕 Gráfico Pizza", "📊 Gráfico Barras"],
         ["📄 Gerar PDF", "📈 Gerar XLSX", "🗑️ Resetar Valores"],
-        ["🤖 Quero um robô"] # <-- NOVO BOTÃO
+        ["🤖 Quero um robô"]
     ]
     if user_id == ADMIN_USER_ID: 
-        teclado.append(["🧑‍💼 Ver Usuários"]) # Emoji de Admin
+        teclado.append(["🧑‍💼 Ver Usuários"])
     return ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=False)
 
 def teclado_admin_usuario_selecionado():
@@ -186,10 +185,20 @@ def gerar_pdf(user_id=None, filename="relatorio.pdf", inicio=None, fim=None):
     story.append(Paragraph(f"Saldo: R$ {formatar_valor(saldo)}", styles["Normal"])); story.append(Spacer(1, 20))
     story.append(Paragraph("💰 Entradas:", styles["Heading2"]))
     trans_e = db.get_todas(user_id=user_id, tipo="entrada", inicio=inicio, fim=fim)
-    for t in trans_e: story.append(Paragraph(f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}", styles["Normal"]))
+    # --- MODIFICAÇÃO DE SEGURANÇA ---
+    # Adicionado try/except dentro do loop, igual ao gerar_xlsx
+    for t in trans_e:
+        try:
+            story.append(Paragraph(f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}", styles["Normal"]))
+        except (decimal.InvalidOperation, TypeError, ValueError):
+            pass # Ignora transações com valor None
     story.append(Spacer(1, 20)); story.append(Paragraph("💸 Saídas:", styles["Heading2"]))
     trans_s = db.get_todas(user_id=user_id, tipo="gasto", inicio=inicio, fim=fim)
-    for t in trans_s: story.append(Paragraph(f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}", styles["Normal"]))
+    for t in trans_s:
+        try:
+            story.append(Paragraph(f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}", styles["Normal"]))
+        except (decimal.InvalidOperation, TypeError, ValueError):
+            pass # Ignora transações com valor None
     doc.build(story); return filename
 
 def gerar_xlsx(user_id=None, filename="relatorio.xlsx", inicio=None, fim=None):
@@ -221,11 +230,18 @@ def verificar_alerta(user_id):
     if status: return (f"{status}\n💰 Entradas: R$ {formatar_valor(entradas)}\n💸 Gastos: R$ {formatar_valor(gastos)}\n📌 Saldo: R$ {formatar_valor(saldo)}")
     return None
 
+# ===================================================================
+# --- MODIFICAÇÃO 2: Proteção contra 'None' em 'enviar_extrato_filtrado' ---
+# ===================================================================
 async def enviar_extrato_filtrado(update: Update, context: ContextTypes.DEFAULT_TYPE, inicio: datetime, fim: datetime, titulo_periodo: str):
     user_id = update.message.from_user.id
     entradas = db.get_todas(user_id, tipo="entrada", inicio=inicio, fim=fim)
     saidas = db.get_todas(user_id, tipo="gasto", inicio=inicio, fim=fim)
-    entradas_filtradas = [t for t in entradas if Decimal(t[2]) > 0]; saidas_filtradas = [t for t in saidas if Decimal(t[2]) > 0]
+    
+    # --- CORREÇÃO AQUI: Adicionado 't[2] is not None' ---
+    entradas_filtradas = [t for t in entradas if t[2] is not None and Decimal(t[2]) > 0]
+    saidas_filtradas = [t for t in saidas if t[2] is not None and Decimal(t[2]) > 0]
+    
     total_entradas = db.get_soma(user_id, "entrada", inicio=inicio, fim=fim); total_gastos = db.get_soma(user_id, "gasto", inicio=inicio, fim=fim); saldo_periodo = total_entradas - total_gastos
     texto = f"🧾 Extrato Filtrado: *{titulo_periodo}*\n\n"
     if not entradas_filtradas and not saidas_filtradas: texto += "Nenhuma transação neste período."
@@ -241,16 +257,19 @@ async def enviar_extrato_filtrado(update: Update, context: ContextTypes.DEFAULT_
         texto += "--- *Resumo do Período* ---\n"; texto += f"💰 Total Entradas: R$ {formatar_valor(total_entradas)}\n"; texto += f"💸 Total Gastos: R$ {formatar_valor(total_gastos)}\n"; texto += f"📌 Saldo Período: R$ {formatar_valor(saldo_periodo)}\n"
     await update.message.reply_text(texto, parse_mode='Markdown', reply_markup=teclado_flutuante(user_id))
 
-# =======================
-# Função de Filtro por Categoria (Já incluída)
-# =======================
+# ===================================================================
+# --- MODIFICAÇÃO 3: Proteção contra 'None' em 'enviar_extrato_por_categoria' ---
+# ===================================================================
 async def enviar_extrato_por_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE, categoria_desejada: str):
     user_id = update.message.from_user.id
     categoria_lower = categoria_desejada.lower().strip()
     entradas_todas = db.get_todas(user_id, tipo="entrada")
     saidas_todas = db.get_todas(user_id, tipo="gasto")
-    entradas_filtradas = [t for t in entradas_todas if t[3].lower() == categoria_lower and Decimal(t[2]) > 0]
-    saidas_filtradas = [t for t in saidas_todas if t[3].lower() == categoria_lower and Decimal(t[2]) > 0]
+    
+    # --- CORREÇÃO AQUI: Adicionado 't[2] is not None' ---
+    entradas_filtradas = [t for t in entradas_todas if t[3].lower() == categoria_lower and t[2] is not None and Decimal(t[2]) > 0]
+    saidas_filtradas = [t for t in saidas_todas if t[3].lower() == categoria_lower and t[2] is not None and Decimal(t[2]) > 0]
+
     total_entradas = sum(Decimal(t[2]) for t in entradas_filtradas)
     total_gastos = sum(Decimal(t[2]) for t in saidas_filtradas)
     saldo_categoria = total_entradas - total_gastos
@@ -282,7 +301,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      reply_markup=teclado_flutuante(user_id))
 
 # ==========================================================
-# --- MODIFICAÇÃO 2: Função Responder (Atualizada) ---
+# --- MODIFICAÇÃO 4: Proteção contra 'None' na Função Responder ---
 # ==========================================================
 async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id; user_name = update.message.from_user.first_name
@@ -308,17 +327,16 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if 'aguardando_filtro_categoria' in context.user_data: del context.user_data['aguardando_filtro_categoria']
         await update.message.reply_text("Ação cancelada.", reply_markup=teclado_flutuante(user_id)); return
 
-    # --- Bloco Admin (Sem alterações) ---
+    # --- Bloco Admin (Omitido por brevidade, mas está correto) ---
     if user_id == ADMIN_USER_ID and "admin_selecionado" in context.user_data:
         selecionado_id, selecionado_nome = context.user_data["admin_selecionado"]
         if 'aguardando_filtro' in context.user_data: del context.user_data['aguardando_filtro']
-        # (O código do admin foi omitido aqui para focar nas mudanças do usuário, mas ele permanece)
         if msg == "💰 Entradas":
-            transacoes = db.get_todas(user_id=selecionado_id, tipo="entrada"); filtradas = [t for t in transacoes if Decimal(t[2]) > 0]
+            transacoes = db.get_todas(user_id=selecionado_id, tipo="entrada"); filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0] # <-- CORREÇÃO AQUI
             texto = f"💰 Entradas de {selecionado_nome}\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]);
             if not filtradas: texto = f"{selecionado_nome} não tem entradas."; await update.message.reply_text(texto, reply_markup=teclado_admin_usuario_selecionado())
         elif msg == "💸 Saídas":
-            transacoes = db.get_todas(user_id=selecionado_id, tipo="gasto"); filtradas = [t for t in transacoes if Decimal(t[2]) > 0]
+            transacoes = db.get_todas(user_id=selecionado_id, tipo="gasto"); filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0] # <-- CORREÇÃO AQUI
             texto = f"💸 Saídas de {selecionado_nome}\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]);
             if not filtradas: texto = f"{selecionado_nome} não tem saídas."; await update.message.reply_text(texto, reply_markup=teclado_admin_usuario_selecionado())
         elif msg == "🧾 Saldo Geral":
@@ -332,13 +350,15 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- Resposta Filtro Período (Atualizado com novo nome) ---
     if 'aguardando_filtro' in context.user_data:
         del context.user_data['aguardando_filtro']; hoje = datetime.now()
+        # renomeia a variável msg para 'titulo_periodo' para clareza
+        titulo_periodo = msg
         if msg == "Hoje": inicio = fim = hoje
         elif msg == "Esta Semana": inicio = hoje - timedelta(days=hoje.weekday()); fim = inicio + timedelta(days=6)
         elif msg == "Este Mês": inicio = hoje.replace(day=1); fim = (inicio + timedelta(days=32)).replace(day=1) - timedelta(days=1)
         elif msg == "Mês Passado": fim = hoje.replace(day=1) - timedelta(days=1); inicio = fim.replace(day=1)
         elif msg == "Este Ano": inicio = hoje.replace(day=1, month=1); fim = hoje.replace(day=31, month=12)
         else: await update.message.reply_text("Filtro cancelado.", reply_markup=teclado_flutuante(user_id)); return
-        await enviar_extrato_filtrado(update, context, inicio, fim, msg); return
+        await enviar_extrato_filtrado(update, context, inicio, fim, titulo_periodo); return
 
     # --- Lógica Usuário Comum (Atualizada com novos emojis/nomes) ---
     if msg == "🗑️ Resetar Valores": 
@@ -352,9 +372,16 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buf = grafico_mensal_barras(user_id); await update.message.reply_photo(buf, caption="📊 Entradas x Gastos", reply_markup=teclado_flutuante(user_id)) if buf else await update.message.reply_text("Nenhuma transação.", reply_markup=teclado_flutuante(user_id)); return
 
     if msg == "📥 Ver Entradas": 
-        transacoes = db.get_todas(user_id=user_id, tipo="entrada"); filtradas = [t for t in transacoes if Decimal(t[2]) > 0]; await update.message.reply_text("Nenhuma entrada.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💰 Entradas:\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[6]}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
+        transacoes = db.get_todas(user_id=user_id, tipo="entrada")
+        # --- CORREÇÃO AQUI: Adicionado 't[2] is not None' ---
+        filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0]
+        await update.message.reply_text("Nenhuma entrada.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💰 Entradas:\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[6]}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
+    
     if msg == "📤 Ver Saídas": 
-        transacoes = db.get_todas(user_id=user_id, tipo="gasto"); filtradas = [t for t in transacoes if Decimal(t[2]) > 0]; await update.message.reply_text("Nenhuma saída.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💸 Saídas:\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
+        transacoes = db.get_todas(user_id=user_id, tipo="gasto")
+        # --- CORREÇÃO AQUI: Adicionado 't[2] is not None' ---
+        filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0]
+        await update.message.reply_text("Nenhuma saída.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💸 Saídas:\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
 
     if msg == "🗓️ Filtrar por Período": 
         context.user_data['aguardando_filtro'] = True; await update.message.reply_text("Selecione o período:", reply_markup=teclado_filtros_periodo()); return
@@ -364,8 +391,9 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['aguardando_filtro_categoria'] = True 
         trans_gastos = db.get_todas(user_id=user_id, tipo="gasto")
         trans_entradas = db.get_todas(user_id=user_id, tipo="entrada")
-        cats_gasto = {t[3] for t in trans_gastos if Decimal(t[2]) > 0}
-        cats_entrada = {t[3] for t in trans_entradas if Decimal(t[2]) > 0}
+        # --- CORREÇÃO AQUI: Adicionado 't[2] is not None' ---
+        cats_gasto = {t[3] for t in trans_gastos if t[2] is not None and Decimal(t[2]) > 0}
+        cats_entrada = {t[3] for t in trans_entradas if t[2] is not None and Decimal(t[2]) > 0}
         categorias_unicas = sorted(list(cats_gasto.union(cats_entrada)))
         if not categorias_unicas:
             await update.message.reply_text("Nenhuma categoria registrada ainda.", reply_markup=teclado_flutuante(user_id))
@@ -394,19 +422,13 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg == "📈 Gerar XLSX": 
         filename = gerar_xlsx(user_id); await update.message.reply_document(open(filename, "rb"), reply_markup=teclado_flutuante(user_id)); os.remove(filename); return
 
-    # ==========================================================
-    # --- MODIFICAÇÃO 3: Adicionar resposta "Quero um robô" ---
-    # ==========================================================
     if msg == "🤖 Quero um robô":
-        # Assumindo que seu username do Telegram é 'maiconjbf'
-        # Se for outro, troque o link abaixo.
         await update.message.reply_text(
             "Ótima ideia! Eu também posso criar um robô personalizado para você ou sua empresa.\n\n"
             "Me chame no Telegram para discutir seu projeto: 👉 https://t.me/maicon_junio",
             reply_markup=teclado_flutuante(user_id) # Mantém o teclado principal
         )
         return
-    # --- Fim do Novo Bloco ---
 
     # --- Lógica Admin (Listar/Selecionar) ---
     if msg == "🧑‍💼 Ver Usuários" and user_id == ADMIN_USER_ID: 
