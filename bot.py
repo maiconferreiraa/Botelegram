@@ -402,7 +402,7 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Se for outro, troque o link abaixo.
         await update.message.reply_text(
             "Ótima ideia! Eu também posso criar um robô personalizado para você ou sua empresa.\n\n"
-            "Me chame no Telegram para discutir seu projeto: 👉 https://t.me/maiconjbf",
+            "Me chame no Telegram para discutir seu projeto: 👉 https://t.me/maicon_junio",
             reply_markup=teclado_flutuante(user_id) # Mantém o teclado principal
         )
         return
