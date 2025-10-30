@@ -128,7 +128,7 @@ def interpretar_mensagem(texto: str):
 
 
 # ==========================================================
-# --- MODIFICAÇÃO 1: Adicionar botão ao Teclado Flutuante ---
+# --- Teclado Flutuante (Botão já estava adicionado) ---
 # ==========================================================
 def teclado_flutuante(user_id):
     entradas = db.get_soma(user_id, "entrada"); gastos = db.get_soma(user_id, "gasto"); saldo = entradas - gastos
@@ -139,7 +139,7 @@ def teclado_flutuante(user_id):
         [status],
         ["🧾 Saldo Geral", "💳 Gastos por Cartão"],
         ["💰 Ver Entradas (Tudo)", "💸 Ver Saídas (Tudo)"],
-        ["🧾 Filtrar Extrato", "📊 Filtrar por Categoria"], # <-- BOTÃO ADICIONADO AQUI
+        ["🧾 Filtrar Extrato", "📊 Filtrar por Categoria"], # <-- BOTÃO JÁ EXISTENTE
         ["📊 Gráfico Pizza", "📊 Gráfico Barras"],
         ["📑 Gerar PDF", "📊 Gerar XLSX", "🔄 Resetar Valores"]
     ]
@@ -237,62 +237,34 @@ async def enviar_extrato_filtrado(update: Update, context: ContextTypes.DEFAULT_
         texto += "--- *Resumo do Período* ---\n"; texto += f"💰 Total Entradas: R$ {formatar_valor(total_entradas)}\n"; texto += f"💸 Total Gastos: R$ {formatar_valor(total_gastos)}\n"; texto += f"📌 Saldo Período: R$ {formatar_valor(saldo_periodo)}\n"
     await update.message.reply_text(texto, parse_mode='Markdown', reply_markup=teclado_flutuante(user_id))
 
-# ==========================================================
-# --- MODIFICAÇÃO 2: Nova Função de Filtragem por Categoria ---
-# ==========================================================
+# =======================
+# Função de Filtro por Categoria (Já incluída)
+# =======================
 async def enviar_extrato_por_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE, categoria_desejada: str):
-    """Busca transações no DB e filtra pela categoria em Python."""
     user_id = update.message.from_user.id
-    # Normaliza a categoria digitada para comparação
     categoria_lower = categoria_desejada.lower().strip()
-
-    # 1. Buscar TODAS as transações do usuário
-    #    (get_todas já retorna ordenado por ID DESC - mais novos primeiro)
     entradas_todas = db.get_todas(user_id, tipo="entrada")
     saidas_todas = db.get_todas(user_id, tipo="gasto")
-
-    # 2. Filtrar pela categoria (em Python) e remover valores zero
-    #    Índice t[3] é a coluna 'categoria' no retorno de get_todas
-    #    Índice t[2] é a coluna 'valor_num'
     entradas_filtradas = [t for t in entradas_todas if t[3].lower() == categoria_lower and Decimal(t[2]) > 0]
     saidas_filtradas = [t for t in saidas_todas if t[3].lower() == categoria_lower and Decimal(t[2]) > 0]
-
-    # 3. Calcular somas APENAS das transações filtradas
     total_entradas = sum(Decimal(t[2]) for t in entradas_filtradas)
     total_gastos = sum(Decimal(t[2]) for t in saidas_filtradas)
-    saldo_categoria = total_entradas - total_gastos # Saldo específico desta categoria
-
-    # 4. Construir a mensagem
-    # Usa capitalize() para mostrar o nome da categoria com a primeira letra maiúscula
+    saldo_categoria = total_entradas - total_gastos
     texto = f"🧾 Extrato Filtrado: *Categoria: {categoria_desejada.capitalize()}*\n\n"
-
     if not entradas_filtradas and not saidas_filtradas:
         texto += "Nenhuma transação encontrada para esta categoria."
         await update.message.reply_text(texto, parse_mode='Markdown', reply_markup=teclado_flutuante(user_id))
         return
-
-    # Seção de Entradas (se houver)
     if entradas_filtradas:
         texto += "--- *Entradas* ---\n"
-        for t in entradas_filtradas:
-            # Indices: 2=valor, 3=categoria, 6=data
-            texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[6]}\n"
+        for t in entradas_filtradas: texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[6]}\n"
         texto += "\n"
-
-    # Seção de Saídas (se houver)
     if saidas_filtradas:
         texto += "--- *Saídas* ---\n"
-        for t in saidas_filtradas:
-             # Indices: 2=valor, 3=categoria, 5=cartao, 6=data
-            texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}\n"
+        for t in saidas_filtradas: texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}\n"
         texto += "\n"
-
-    # Resumo da Categoria
     texto += f"--- *Resumo da Categoria: {categoria_desejada.capitalize()}* ---\n"
-    texto += f"💰 Total Entradas: R$ {formatar_valor(total_entradas)}\n"
-    texto += f"💸 Total Gastos: R$ {formatar_valor(total_gastos)}\n"
-    texto += f"📌 Saldo Categoria: R$ {formatar_valor(saldo_categoria)}\n"
-
+    texto += f"💰 Total Entradas: R$ {formatar_valor(total_entradas)}\n"; texto += f"💸 Total Gastos: R$ {formatar_valor(total_gastos)}\n"; texto += f"📌 Saldo Categoria: R$ {formatar_valor(saldo_categoria)}\n"
     await update.message.reply_text(texto, parse_mode='Markdown', reply_markup=teclado_flutuante(user_id))
 
 # =======================
@@ -306,33 +278,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      reply_markup=teclado_flutuante(user_id))
 
 # ==========================================================
-# --- MODIFICAÇÃO 3: Adicionar lógica ao Responder ---
+# --- Função Responder (Com a lógica de filtro MODIFICADA) ---
 # ==========================================================
 async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id; user_name = update.message.from_user.first_name
     msg = update.message.text
 
-    # --- NOVO BLOCO 1: Capturar resposta do filtro por categoria ---
+    # --- Bloco 1: Capturar resposta do filtro por categoria ---
+    # (Esta lógica captura o CLIQUE no botão da categoria)
     if 'aguardando_filtro_categoria' in context.user_data:
         del context.user_data['aguardando_filtro_categoria'] # Limpa o estado
         categoria_digitada = msg.strip()
-        # Validação simples para evitar chamar a função com "Cancelar"
-        if categoria_digitada.lower() != "cancelar":
-            await enviar_extrato_por_categoria(update, context, categoria_digitada)
-        else:
+        
+        if categoria_digitada.lower() == "cancelar":
              await update.message.reply_text("Filtro por categoria cancelado.", reply_markup=teclado_flutuante(user_id))
+        else:
+            # Chama a função de extrato com a categoria clicada
+            await enviar_extrato_por_categoria(update, context, categoria_digitada)
         return # Impede que o resto da função seja executado
-    # --- Fim Novo Bloco 1 ---
+    # --- Fim Bloco 1 ---
 
     # --- Handlers Voltar/Cancelar padrão ---
     if msg == "⬅️ Voltar" and user_id == ADMIN_USER_ID:
         if "admin_selecionado" in context.user_data: del context.user_data["admin_selecionado"]
         await update.message.reply_text("Voltando...", reply_markup=teclado_flutuante(user_id)); return
     if msg == "Cancelar":
-        # Cancela filtro de período ou categoria (se houver)
         if 'aguardando_filtro' in context.user_data: del context.user_data['aguardando_filtro']
-        # Adicionado para cancelar o filtro de categoria também
-        if 'aguardando_filtro_categoria' in context.user_data: del context.user_data['aguardando_filtro_categoria']
+        # (O estado 'aguardando_filtro_categoria' é tratado acima)
         await update.message.reply_text("Ação cancelada.", reply_markup=teclado_flutuante(user_id)); return
 
     # --- Bloco Admin (Sem alterações) ---
@@ -378,16 +350,53 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if msg == "🧾 Filtrar Extrato": context.user_data['aguardando_filtro'] = True; await update.message.reply_text("Selecione o período:", reply_markup=teclado_filtros_periodo()); return
 
-    # --- NOVO BLOCO 2: Capturar clique no botão de filtro por categoria ---
+    # ========================================================================
+    # --- NOVO BLOCO 2 (MODIFICADO): Gera teclado dinâmico de categorias ---
+    # ========================================================================
     if msg == "📊 Filtrar por Categoria":
-        context.user_data['aguardando_filtro_categoria'] = True
-        # Mostra um teclado simples apenas com "Cancelar" enquanto espera a categoria
+        context.user_data['aguardando_filtro_categoria'] = True # Define o estado de espera
+        
+        # 1. Buscar categorias únicas do DB (usando Python)
+        trans_gastos = db.get_todas(user_id=user_id, tipo="gasto")
+        trans_entradas = db.get_todas(user_id=user_id, tipo="entrada")
+        
+        # t[3] é 'categoria', t[2] é 'valor_num'. Pegamos apenas categorias com valor > 0
+        cats_gasto = {t[3] for t in trans_gastos if Decimal(t[2]) > 0}
+        cats_entrada = {t[3] for t in trans_entradas if Decimal(t[2]) > 0}
+        
+        # Junta as categorias de entrada e saída, e ordena alfabeticamente
+        categorias_unicas = sorted(list(cats_gasto.union(cats_entrada)))
+
+        if not categorias_unicas:
+            # Se não houver categorias, informa o usuário e cancela a ação
+            await update.message.reply_text(
+                "Nenhuma categoria foi registrada ainda. Use o bot primeiro (ex: '50 lanche').",
+                reply_markup=teclado_flutuante(user_id) # Volta ao menu principal
+            )
+            del context.user_data['aguardando_filtro_categoria'] # Limpa o estado
+            return
+        
+        # 2. Criar o teclado dinâmico
+        # Agrupa os botões de 2 em 2 para um layout mais limpo
+        teclado_categorias = []
+        linha_atual = []
+        for cat in categorias_unicas:
+            linha_atual.append(cat)
+            if len(linha_atual) == 2: # Se a linha tem 2 botões, adiciona ao teclado
+                teclado_categorias.append(linha_atual)
+                linha_atual = [] # Começa uma nova linha
+        if linha_atual: # Adiciona a última linha se ela não tiver 2 botões
+            teclado_categorias.append(linha_atual)
+        
+        teclado_categorias.append(["Cancelar"]) # Adiciona o botão "Cancelar" no final
+
+        # 3. Envia a mensagem com o novo teclado
         await update.message.reply_text(
-            "Digite o nome da categoria que deseja filtrar (ex: Alimentação, Transporte, Salário):",
-            reply_markup=ReplyKeyboardMarkup([["Cancelar"]], resize_keyboard=True, one_time_keyboard=True)
+            "Selecione uma categoria para filtrar:",
+            reply_markup=ReplyKeyboardMarkup(teclado_categorias, resize_keyboard=True, one_time_keyboard=True)
         )
         return
-    # --- Fim Novo Bloco 2 ---
+    # --- Fim do Bloco Modificado ---
 
     if msg == "💳 Gastos por Cartão": texto = gastos_por_cartao(user_id); await update.message.reply_text(texto, reply_markup=teclado_flutuante(user_id)); return
     if msg == "🧾 Saldo Geral":
@@ -407,7 +416,6 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- Interpretação de Mensagem (Adicionar transação) ---
     resultado = interpretar_mensagem(msg)
     if resultado["acao"] == "add":
-        # A categoria já vem mapeada (ex: "Alimentação") da função interpretar_mensagem
         db.add_transacao(user_id, resultado["tipo"], resultado["valor_num"], resultado["valor_txt"], resultado["categoria"], resultado["metodo"], resultado["cartao"], user_name)
         msg_resp = f"✅ {resultado['tipo'].capitalize()} R$ {formatar_valor(resultado['valor_num'])} (Cat: {resultado['categoria']})"
         if resultado['cartao']: msg_resp += f"\n💳 Cartão: {resultado['cartao']}"
