@@ -1,216 +1,258 @@
-import sqlite3
+import psycopg2 # Substitui o sqlite3
+import os       # Para ler a DATABASE_URL
 from decimal import Decimal
 from datetime import datetime, timedelta
 
 class Database:
-    def __init__(self, db_name="financeiro.db"):
-        self.conn = sqlite3.connect(db_name, check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        self.criar_tabela_transacoes() # Renomeado para clareza
-        self.criar_tabela_usuarios()   # --- NOVO --- Adicionado para normalizar
-        self.migrar_colunas_antigas()  # Renomeado
+    def __init__(self):
+        # 1. Lê a URL de conexão do banco (configurada no Render)
+        self.db_url = os.environ.get('DATABASE_URL')
+        if not self.db_url:
+            raise ValueError("Erro: A variável de ambiente DATABASE_URL não foi configurada.")
+        
+        # 2. Em vez de conectar aqui, vamos criar as tabelas
+        self.criar_tabelas()
 
-    def criar_tabela_transacoes(self):
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS transacoes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER, 
-                tipo TEXT,
-                valor_num REAL,
-                valor_txt TEXT,
-                categoria TEXT,
-                metodo TEXT,
-                cartao TEXT,
-                data TEXT,
-                FOREIGN KEY (user_id) REFERENCES usuarios (user_id)
-            )
-        """)
-        self.conn.commit()
-
-    # --- NOVO ---
-    # É uma prática muito melhor ter uma tabela separada para usuários
-    def criar_tabela_usuarios(self):
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS usuarios (
-                user_id INTEGER PRIMARY KEY,
-                nome TEXT
-            )
-        """)
-        self.conn.commit()
-
-    def migrar_colunas_antigas(self):
-        # Migra user_id da tabela antiga se necessário
+    def _get_connection(self):
+        """Helper para obter uma nova conexão (thread-safe)."""
         try:
-            self.cursor.execute("SELECT user_id FROM transacoes LIMIT 1")
-        except sqlite3.OperationalError:
-            try:
-                self.cursor.execute("ALTER TABLE transacoes ADD COLUMN user_id INTEGER")
-                self.conn.commit()
-            except sqlite3.OperationalError:
-                pass # Coluna já existe por algum motivo
+            conn = psycopg2.connect(self.db_url)
+            return conn, conn.cursor()
+        except Exception as e:
+            print(f"Erro ao conectar no PostgreSQL: {e}")
+            return None, None
 
-        # Migra nome da tabela antiga (se existir) para a tabela nova
+    def _close_connection(self, conn, cursor):
+        """Helper para fechar conexões."""
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+    def criar_tabelas(self):
+        """Cria as tabelas se elas não existirem (Sintaxe PostgreSQL)."""
+        conn, cursor = None, None
         try:
-            self.cursor.execute("SELECT nome FROM transacoes LIMIT 1")
-            # Se a coluna 'nome' existe na tabela transacoes, migra os dados
-            self.cursor.execute("""
-                INSERT OR IGNORE INTO usuarios (user_id, nome)
-                SELECT user_id, nome FROM transacoes WHERE nome IS NOT NULL AND nome != ''
-                GROUP BY user_id
+            conn, cursor = self._get_connection()
+            # Tabela Usuarios (BIGINT para user_id do Telegram)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS usuarios (
+                    user_id BIGINT PRIMARY KEY,
+                    nome TEXT
+                )
             """)
-            # (Opcional: Remover a coluna 'nome' de 'transacoes' após migração)
-            # self.cursor.execute("ALTER TABLE transacoes DROP COLUMN nome")
-            self.conn.commit()
-        except sqlite3.OperationalError:
-            pass # Coluna 'nome' não existe em transacoes, tudo bem.
+            
+            # Tabela Transacoes (SERIAL para ID automático, DECIMAL para dinheiro)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transacoes (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
+                    tipo TEXT,
+                    valor_num DECIMAL(10, 2),
+                    valor_txt TEXT,
+                    categoria TEXT,
+                    metodo TEXT,
+                    cartao TEXT,
+                    data TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES usuarios (user_id)
+                )
+            """)
+            conn.commit()
+        except Exception as e:
+            print(f"Erro ao criar tabelas: {e}")
+            if conn: conn.rollback()
+        finally:
+            self._close_connection(conn, cursor)
 
+    # A lógica de migração (migrar_colunas_antigas) foi removida,
+    # pois estamos começando um banco de dados novo e limpo.
 
     def add_transacao(self, user_id, tipo, valor_num, valor_txt, categoria, metodo="dinheiro", cartao=None, nome=""):
-        # --- CORRIGIDO ---
-        # 1. Garante que o usuário existe na tabela 'usuarios'
-        self.cursor.execute("""
-            INSERT INTO usuarios (user_id, nome) VALUES (?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET nome = excluded.nome
-        """, (user_id, nome))
-        
-        # 2. Insere a transação
-        self.cursor.execute("""
-            INSERT INTO transacoes (user_id, tipo, valor_num, valor_txt, categoria, metodo, cartao, data)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, tipo, float(valor_num), valor_txt, categoria, metodo, cartao, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-        self.conn.commit()
+        conn, cursor = None, None
+        try:
+            conn, cursor = self._get_connection()
+            # 1. Garante usuário (Sintaxe PostgreSQL: %s e EXCLUDED.nome)
+            cursor.execute("""
+                INSERT INTO usuarios (user_id, nome) VALUES (%s, %s)
+                ON CONFLICT(user_id) DO UPDATE SET nome = EXCLUDED.nome
+            """, (user_id, nome))
+            
+            # 2. Insere transação (Sintaxe %s e 'data' como objeto datetime)
+            cursor.execute("""
+                INSERT INTO transacoes (user_id, tipo, valor_num, valor_txt, categoria, metodo, cartao, data)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (user_id, tipo, float(valor_num), valor_txt, categoria, metodo, cartao, datetime.now()))
+            conn.commit()
+        except Exception as e:
+            print(f"Erro em add_transacao: {e}")
+            if conn: conn.rollback()
+        finally:
+            self._close_connection(conn, cursor)
 
     def get_soma(self, user_id, tipo, inicio=None, fim=None):
-        query = "SELECT SUM(valor_num) FROM transacoes WHERE tipo=? AND user_id=?"
-        params = [tipo, user_id]
-        if inicio:
-            query += " AND date(data) >= date(?)"
-            params.append(inicio.strftime("%Y-%m-%d"))
-        if fim:
-            query += " AND date(data) <= date(?)"
-            params.append(fim.strftime("%Y-%m-%d"))
-        self.cursor.execute(query, params)
-        result = self.cursor.fetchone()[0]
+        conn, cursor = None, None
+        result = None
+        try:
+            conn, cursor = self._get_connection()
+            # Sintaxe PostgreSQL: %s e data::date para comparar datas
+            query = "SELECT SUM(valor_num) FROM transacoes WHERE tipo=%s AND user_id=%s"
+            params = [tipo, user_id]
+            if inicio:
+                query += " AND data::date >= %s::date"
+                params.append(inicio.strftime("%Y-%m-%d"))
+            if fim:
+                query += " AND data::date <= %s::date"
+                params.append(fim.strftime("%Y-%m-%d"))
+                
+            cursor.execute(query, params)
+            result = cursor.fetchone()[0]
+        except Exception as e:
+            print(f"Erro em get_soma: {e}")
+        finally:
+            self._close_connection(conn, cursor)
         return Decimal(result or 0)
 
-    # --- CORREÇÃO PRINCIPAL ---
     def get_todas(self, user_id=None, tipo=None, inicio=None, fim=None):
-        # *** CORRIGIDO: Seleciona 'valor_num' (o número) em vez de 'valor_txt' (o texto) ***
-        query = "SELECT id, tipo, valor_num, categoria, metodo, cartao, data FROM transacoes WHERE 1=1"
-        params = []
-        if tipo:
-            query += " AND tipo=?"
-            params.append(tipo)
-        if user_id:
-            query += " AND user_id=?"
-            params.append(user_id)
-        if inicio:
-            query += " AND date(data) >= date(?)"
-            params.append(inicio.strftime("%Y-%m-%d"))
-        if fim:
-            query += " AND date(data) <= date(?)"
-            params.append(fim.strftime("%Y-%m-%d"))
-        
-        # Ordena por ID decrescente para mostrar os mais novos primeiro
-        # O bot.py vai filtrar os valores "0", e agora a lista estará completa
-        query += " ORDER BY id DESC" 
-        self.cursor.execute(query, params)
-        return self.cursor.fetchall()
+        conn, cursor = None, None
+        results = []
+        try:
+            conn, cursor = self._get_connection()
+            # Sintaxe PostgreSQL: %s e data::date
+            query = "SELECT id, tipo, valor_num, categoria, metodo, cartao, data FROM transacoes WHERE 1=1"
+            params = []
+            if tipo:
+                query += " AND tipo=%s"
+                params.append(tipo)
+            if user_id:
+                query += " AND user_id=%s"
+                params.append(user_id)
+            if inicio:
+                query += " AND data::date >= %s::date"
+                params.append(inicio.strftime("%Y-%m-%d"))
+            if fim:
+                query += " AND data::date <= %s::date"
+                params.append(fim.strftime("%Y-%m-%d"))
+            
+            query += " ORDER BY id DESC" 
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+        except Exception as e:
+            print(f"Erro em get_todas: {e}")
+        finally:
+            self._close_connection(conn, cursor)
+        return results
 
-    # --- CORREÇÃO DE BUG ---
     def limpar_transacoes(self, user_id=None, opcao=None):
-        now = datetime.now()
-        if opcao == "ultimo":
-            # Busca ordenada por ID DESC (mais novo primeiro)
-            transacoes = self.get_todas(user_id=user_id) 
-            if transacoes:
-                # *** CORRIGIDO: Pega o [0] (mais novo) em vez de [-1] (mais antigo) ***
-                ultima_id = transacoes[0][0] 
-                self.cursor.execute("DELETE FROM transacoes WHERE id=?", (ultima_id,))
-        elif opcao == "dia":
-            hoje = now.strftime("%Y-%m-%d")
-            self.cursor.execute("DELETE FROM transacoes WHERE user_id=? AND date(data)=?", (user_id, hoje))
-        elif opcao == "semana":
-            # Pega segunda-feira da semana atual
-            semana_inicio = now - timedelta(days=now.weekday())
-            self.cursor.execute("DELETE FROM transacoes WHERE user_id=? AND date(data)>=?", (user_id, semana_inicio.strftime("%Y-%m-%d")))
-        elif opcao == "mes":
-            primeiro_dia_mes = now.replace(day=1).strftime("%Y-%m-%d")
-            self.cursor.execute("DELETE FROM transacoes WHERE user_id=? AND date(data)>=?", (user_id, primeiro_dia_mes))
-        elif opcao == "tudo" and user_id is not None: # Adicionada proteção
-            self.cursor.execute("DELETE FROM transacoes WHERE user_id=?", (user_id,))
-        self.conn.commit()
+        conn, cursor = None, None
+        try:
+            conn, cursor = self._get_connection()
+            now = datetime.now()
+            if opcao == "ultimo":
+                # A lógica de "get_todas" já foi corrigida
+                transacoes = self.get_todas(user_id=user_id) 
+                if transacoes:
+                    ultima_id = transacoes[0][0] 
+                    cursor.execute("DELETE FROM transacoes WHERE id=%s", (ultima_id,))
+            elif opcao == "dia":
+                hoje = now.strftime("%Y-%m-%d")
+                cursor.execute("DELETE FROM transacoes WHERE user_id=%s AND data::date = %s::date", (user_id, hoje))
+            elif opcao == "semana":
+                semana_inicio = now - timedelta(days=now.weekday())
+                cursor.execute("DELETE FROM transacoes WHERE user_id=%s AND data::date >= %s::date", (user_id, semana_inicio.strftime("%Y-%m-%d")))
+            elif opcao == "mes":
+                primeiro_dia_mes = now.replace(day=1).strftime("%Y-%m-%d")
+                cursor.execute("DELETE FROM transacoes WHERE user_id=%s AND data::date >= %s::date", (user_id, primeiro_dia_mes))
+            elif opcao == "tudo" and user_id is not None:
+                cursor.execute("DELETE FROM transacoes WHERE user_id=%s", (user_id,))
+            conn.commit()
+        except Exception as e:
+            print(f"Erro em limpar_transacoes: {e}")
+            if conn: conn.rollback()
+        finally:
+            self._close_connection(conn, cursor)
 
-    # --- CORREÇÃO DE EFICIÊNCIA ---
     def listar_usuarios(self):
-        # Busca na nova tabela de usuários, que é muito mais rápida e correta
-        self.cursor.execute("SELECT user_id, nome FROM usuarios ORDER BY nome ASC")
-        return [(row[0], row[1] or f"Usuário {row[0]}") for row in self.cursor.fetchall()]
+        conn, cursor = None, None
+        results = []
+        try:
+            conn, cursor = self._get_connection()
+            cursor.execute("SELECT user_id, nome FROM usuarios ORDER BY nome ASC")
+            results = [(row[0], row[1] or f"Usuário {row[0]}") for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"Erro em listar_usuarios: {e}")
+        finally:
+            self._close_connection(conn, cursor)
+        return results
 
-    # =========================
-    # Funções para gráficos
-    # =========================
     def gastos_por_categoria(self, user_id=None, inicio=None, fim=None):
-        query = "SELECT categoria, SUM(valor_num) FROM transacoes WHERE tipo='gasto'"
-        params = []
-        if user_id is not None:
-            query += " AND user_id=?"
-            params.append(user_id)
-        if inicio:
-            query += " AND date(data) >= date(?)"
-            params.append(inicio.strftime("%Y-%m-%d"))
-        if fim:
-            query += " AND date(data) <= date(?)"
-            params.append(fim.strftime("%Y-%m-%d"))
-        query += " GROUP BY categoria HAVING SUM(valor_num) > 0" # Adicionado filtro
-        self.cursor.execute(query, params)
-        return self.cursor.fetchall()
+        conn, cursor = None, None
+        results = []
+        try:
+            conn, cursor = self._get_connection()
+            query = "SELECT categoria, SUM(valor_num) FROM transacoes WHERE tipo='gasto'"
+            params = []
+            if user_id is not None:
+                query += " AND user_id=%s"
+                params.append(user_id)
+            if inicio:
+                query += " AND data::date >= %s::date"
+                params.append(inicio.strftime("%Y-%m-%d"))
+            if fim:
+                query += " AND data::date <= %s::date"
+                params.append(fim.strftime("%Y-%m-%d"))
+            query += " GROUP BY categoria HAVING SUM(valor_num) > 0"
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+        except Exception as e:
+            print(f"Erro em gastos_por_categoria: {e}")
+        finally:
+            self._close_connection(conn, cursor)
+        return results
 
     def series_mensais(self, user_id=None, meses=6):
+        # Esta função não usa SQL diretamente, apenas chama get_soma,
+        # que já foi corrigido. Nenhuma mudança é necessária aqui.
         hoje = datetime.now()
         labels = []
         entradas_vals = []
         gastos_vals = []
 
         for i in reversed(range(meses)):
-            # Cálculo de mês mais robusto
             mes_alvo = hoje.month - i
             ano_alvo = hoje.year
             if mes_alvo <= 0:
                 mes_alvo += 12
                 ano_alvo -= 1
-            
             primeiro_dia = datetime(ano_alvo, mes_alvo, 1)
-            
-            # Encontra o último dia do mês
             prox_mes = mes_alvo + 1
             prox_ano = ano_alvo
             if prox_mes > 12:
                 prox_mes = 1
                 prox_ano += 1
-            
             ultimo_dia = datetime(prox_ano, prox_mes, 1) - timedelta(days=1)
-            
             labels.append(primeiro_dia.strftime("%b/%Y"))
-
             soma_entrada = self.get_soma(user_id, "entrada", inicio=primeiro_dia, fim=ultimo_dia)
             soma_gasto = self.get_soma(user_id, "gasto", inicio=primeiro_dia, fim=ultimo_dia)
-
             entradas_vals.append(float(soma_entrada))
             gastos_vals.append(float(soma_gasto))
-
         return labels, entradas_vals, gastos_vals
 
     def get_gastos_por_cartao(self, user_id=None):
-        query = "SELECT cartao, SUM(valor_num) FROM transacoes WHERE tipo='gasto' AND cartao IS NOT NULL"
-        params = []
-        if user_id is not None:
-            query += " AND user_id=?"
-            params.append(user_id)
-        query += " GROUP BY cartao HAVING SUM(valor_num) > 0" # Adicionado filtro
-        self.cursor.execute(query, params)
-        return self.cursor.fetchall()
+        conn, cursor = None, None
+        results = []
+        try:
+            conn, cursor = self._get_connection()
+            query = "SELECT cartao, SUM(valor_num) FROM transacoes WHERE tipo='gasto' AND cartao IS NOT NULL"
+            params = []
+            if user_id is not None:
+                query += " AND user_id=%s"
+                params.append(user_id)
+            query += " GROUP BY cartao HAVING SUM(valor_num) > 0"
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+        except Exception as e:
+            print(f"Erro em get_gastos_por_cartao: {e}")
+        finally:
+            self._close_connection(conn, cursor)
+        return results
 
-
-# Cria o objeto global do banco
+# Cria o objeto global do banco (agora conectando ao PostgreSQL)
 db = Database()

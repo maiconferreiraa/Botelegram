@@ -1,0 +1,4 @@
+# Ignorar arquivos de banco de dados SQLite
+*.db
+*.db-journal
+*.sqlite

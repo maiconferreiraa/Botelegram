@@ -4,3 +4,4 @@ waitress
 matplotlib
 openpyxl
 reportlab
+psycopg2-binary
