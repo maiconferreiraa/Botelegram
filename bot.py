@@ -29,7 +29,7 @@ from db import db # importa a instância do db.py
 # =======================
 # CONFIGURAÇÃO ADMIN
 # =======================
-ADMIN_USER_ID = 853716041 # substitua pelo seu ID do Telegram
+ADMIN_USER_ID = 853716041 # ID @maiconjbf
 
 # ===================================================================
 # --- MAPEAMENTO DE CATEGORIAS (Como definido anteriormente) ---
@@ -38,7 +38,7 @@ MAPEAMENTO_CATEGORIAS = {
     # --- GASTOS ---
     "Alimentação": ["supermercado", "mercado", "lanche", "churrasco", "restaurante", "ifood", "rappi", "padaria", "açougue", "hortifruti", "pizza", "comida", "jantar", "almoço", "café", "bebida"],
     "Transporte": ["gasolina", "uber", "99", "estacionamento", "ipva", "seguro", "carro", "manutenção", "onibus", "metrô", "passagem", "combustível", "pedagio", "taxi", "aplicativo", "app"],
-    "Moradia": ["aluguel", "condomínio", "iptu", "luz", "água", "internet", "gás", "diarista", "faxina", "energia", "net", "claro", "vivo", "oi", "tim", "conserto", "reparo"],
+    "Moradia": ["aluguel", "condomínio", "iptu", "luz", "água", "internet", "gás", "diarista", "faxina", "energia", "net", "claro", "vivo", "oi", "tim", "conserto", "reparo", "internet celular", "celular internet"],
     "Construção/Reforma": ["construção", "reforma", "material", "pedreiro", "tinta", "cimento", "leroy", "telhanorte", "ferramenta", "obra", "ferragens"],
     "Casa/Decoração": ["casa", "decoração", "móvel", "utensílio", "cama", "mesa", "banho", "eletrodoméstico", "manutenção", "casa", "jardinagem", "ikea", "tokstok"],
     "Saúde": ["farmácia", "remédio", "médico", "consulta", "plano", "saude", "exame", "dentista", "hospital", "terapia", "psicologo"],
@@ -49,7 +49,7 @@ MAPEAMENTO_CATEGORIAS = {
     "Pets": ["pet", "ração", "veterinário", "petshop", "cachorro", "gato"],
     # --- ENTRADAS ---
     "Salário": ["salário", "salario", "pagamento", "holerite"],
-    "Vendas": ["venda", "cliente", "recebimento", "comissao"],
+    "Vendas": ["venda", "cliente", "recebimento", "comissao", "serviço", "cliente pagou"],
     "Investimentos": ["investimento", "ação", "ações", "b3", "fundo", "tesouro", "cdb", "cripto", "resgate", "dividendo", "jcp"],
     "Outras Entradas": ["entrada", "ganhei", "recebi", "pix", "reembolso", "presente"]
 }
@@ -128,22 +128,26 @@ def interpretar_mensagem(texto: str):
 
 
 # ==========================================================
-# --- Teclado Flutuante (Botão já estava adicionado) ---
+# --- MODIFICAÇÃO 1: Emojis e Botões do Teclado Flutuante ---
 # ==========================================================
 def teclado_flutuante(user_id):
     entradas = db.get_soma(user_id, "entrada"); gastos = db.get_soma(user_id, "gasto"); saldo = entradas - gastos
     status = "🟢😀 Finanças Saudáveis"
     if saldo < 0: status = "🔴😟 Saldo Negativo"
     elif entradas > 0 and (gastos / entradas) > Decimal("0.7"): status = "🟠🤔 Gastos altos!"
+    
+    # Emojis únicos para cada botão
     teclado = [
         [status],
-        ["🧾 Saldo Geral", "💳 Gastos por Cartão"],
-        ["💰 Ver Entradas (Tudo)", "💸 Ver Saídas (Tudo)"],
-        ["🧾 Filtrar Extrato", "📊 Filtrar por Categoria"], # <-- BOTÃO JÁ EXISTENTE
-        ["📊 Gráfico Pizza", "📊 Gráfico Barras"],
-        ["📑 Gerar PDF", "📊 Gerar XLSX", "🔄 Resetar Valores"]
+        ["⚖️ Saldo Geral", "💳 Gastos por Cartão"],
+        ["📥 Ver Entradas", "📤 Ver Saídas"],
+        ["🗓️ Filtrar por Período", "🏷️ Filtrar por Categoria"],
+        ["🍕 Gráfico Pizza", "📊 Gráfico Barras"],
+        ["📄 Gerar PDF", "📈 Gerar XLSX", "🗑️ Resetar Valores"],
+        ["🤖 Quero um robô"] # <-- NOVO BOTÃO
     ]
-    if user_id == ADMIN_USER_ID: teclado.append(["👁️ Ver Usuários"])
+    if user_id == ADMIN_USER_ID: 
+        teclado.append(["🧑‍💼 Ver Usuários"]) # Emoji de Admin
     return ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=False)
 
 def teclado_admin_usuario_selecionado():
@@ -278,24 +282,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      reply_markup=teclado_flutuante(user_id))
 
 # ==========================================================
-# --- Função Responder (Com a lógica de filtro MODIFICADA) ---
+# --- MODIFICAÇÃO 2: Função Responder (Atualizada) ---
 # ==========================================================
 async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id; user_name = update.message.from_user.first_name
     msg = update.message.text
 
     # --- Bloco 1: Capturar resposta do filtro por categoria ---
-    # (Esta lógica captura o CLIQUE no botão da categoria)
     if 'aguardando_filtro_categoria' in context.user_data:
-        del context.user_data['aguardando_filtro_categoria'] # Limpa o estado
+        del context.user_data['aguardando_filtro_categoria'] 
         categoria_digitada = msg.strip()
-        
-        if categoria_digitada.lower() == "cancelar":
-             await update.message.reply_text("Filtro por categoria cancelado.", reply_markup=teclado_flutuante(user_id))
-        else:
-            # Chama a função de extrato com a categoria clicada
+        if categoria_digitada.lower() != "cancelar":
             await enviar_extrato_por_categoria(update, context, categoria_digitada)
-        return # Impede que o resto da função seja executado
+        else:
+             await update.message.reply_text("Filtro por categoria cancelado.", reply_markup=teclado_flutuante(user_id))
+        return 
     # --- Fim Bloco 1 ---
 
     # --- Handlers Voltar/Cancelar padrão ---
@@ -304,13 +305,14 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Voltando...", reply_markup=teclado_flutuante(user_id)); return
     if msg == "Cancelar":
         if 'aguardando_filtro' in context.user_data: del context.user_data['aguardando_filtro']
-        # (O estado 'aguardando_filtro_categoria' é tratado acima)
+        if 'aguardando_filtro_categoria' in context.user_data: del context.user_data['aguardando_filtro_categoria']
         await update.message.reply_text("Ação cancelada.", reply_markup=teclado_flutuante(user_id)); return
 
     # --- Bloco Admin (Sem alterações) ---
     if user_id == ADMIN_USER_ID and "admin_selecionado" in context.user_data:
         selecionado_id, selecionado_nome = context.user_data["admin_selecionado"]
         if 'aguardando_filtro' in context.user_data: del context.user_data['aguardando_filtro']
+        # (O código do admin foi omitido aqui para focar nas mudanças do usuário, mas ele permanece)
         if msg == "💰 Entradas":
             transacoes = db.get_todas(user_id=selecionado_id, tipo="entrada"); filtradas = [t for t in transacoes if Decimal(t[2]) > 0]
             texto = f"💰 Entradas de {selecionado_nome}\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]);
@@ -327,7 +329,7 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: await update.message.reply_text("Inválido.", reply_markup=teclado_admin_usuario_selecionado())
         return
 
-    # --- Resposta Filtro Período (Sem alterações) ---
+    # --- Resposta Filtro Período (Atualizado com novo nome) ---
     if 'aguardando_filtro' in context.user_data:
         del context.user_data['aguardando_filtro']; hoje = datetime.now()
         if msg == "Hoje": inicio = fim = hoje
@@ -338,80 +340,79 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: await update.message.reply_text("Filtro cancelado.", reply_markup=teclado_flutuante(user_id)); return
         await enviar_extrato_filtrado(update, context, inicio, fim, msg); return
 
-    # --- Lógica Usuário Comum ---
-    if msg == "🔄 Resetar Valores": await update.message.reply_text("Período para resetar:", reply_markup=ReplyKeyboardMarkup([["Último valor", "Hoje"], ["Última semana", "Este mês"], ["Tudo"], ["Cancelar"]], resize_keyboard=True, one_time_keyboard=True)); return
-    elif msg in ["Último valor", "Hoje", "Última semana", "Este mês", "Tudo"]: mapa = {"Último valor":"ultimo","Hoje":"dia","Última semana":"semana","Este mês":"mes","Tudo":"tudo"}; db.limpar_transacoes(user_id, mapa[msg]); await update.message.reply_text(f"✅ Removido ({msg})", reply_markup=teclado_flutuante(user_id)); return
+    # --- Lógica Usuário Comum (Atualizada com novos emojis/nomes) ---
+    if msg == "🗑️ Resetar Valores": 
+        await update.message.reply_text("Período para resetar:", reply_markup=ReplyKeyboardMarkup([["Último valor", "Hoje"], ["Última semana", "Este mês"], ["Tudo"], ["Cancelar"]], resize_keyboard=True, one_time_keyboard=True)); return
+    elif msg in ["Último valor", "Hoje", "Última semana", "Este mês", "Tudo"]: 
+        mapa = {"Último valor":"ultimo","Hoje":"dia","Última semana":"semana","Este mês":"mes","Tudo":"tudo"}; db.limpar_transacoes(user_id, mapa[msg]); await update.message.reply_text(f"✅ Removido ({msg})", reply_markup=teclado_flutuante(user_id)); return
 
-    if msg == "📊 Gráfico Pizza": buf = grafico_gastos_pizza(user_id); await update.message.reply_photo(buf, caption="💸 Gastos por Categoria", reply_markup=teclado_flutuante(user_id)) if buf else await update.message.reply_text("Nenhum gasto.", reply_markup=teclado_flutuante(user_id)); return
-    if msg == "📊 Gráfico Barras": buf = grafico_mensal_barras(user_id); await update.message.reply_photo(buf, caption="📊 Entradas x Gastos", reply_markup=teclado_flutuante(user_id)) if buf else await update.message.reply_text("Nenhuma transação.", reply_markup=teclado_flutuante(user_id)); return
+    if msg == "🍕 Gráfico Pizza": 
+        buf = grafico_gastos_pizza(user_id); await update.message.reply_photo(buf, caption="💸 Gastos por Categoria", reply_markup=teclado_flutuante(user_id)) if buf else await update.message.reply_text("Nenhum gasto.", reply_markup=teclado_flutuante(user_id)); return
+    if msg == "📊 Gráfico Barras": 
+        buf = grafico_mensal_barras(user_id); await update.message.reply_photo(buf, caption="📊 Entradas x Gastos", reply_markup=teclado_flutuante(user_id)) if buf else await update.message.reply_text("Nenhuma transação.", reply_markup=teclado_flutuante(user_id)); return
 
-    if msg == "💰 Ver Entradas (Tudo)": transacoes = db.get_todas(user_id=user_id, tipo="entrada"); filtradas = [t for t in transacoes if Decimal(t[2]) > 0]; await update.message.reply_text("Nenhuma entrada.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💰 Entradas:\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[6]}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
-    if msg == "💸 Ver Saídas (Tudo)": transacoes = db.get_todas(user_id=user_id, tipo="gasto"); filtradas = [t for t in transacoes if Decimal(t[2]) > 0]; await update.message.reply_text("Nenhuma saída.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💸 Saídas:\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
+    if msg == "📥 Ver Entradas": 
+        transacoes = db.get_todas(user_id=user_id, tipo="entrada"); filtradas = [t for t in transacoes if Decimal(t[2]) > 0]; await update.message.reply_text("Nenhuma entrada.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💰 Entradas:\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[6]}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
+    if msg == "📤 Ver Saídas": 
+        transacoes = db.get_todas(user_id=user_id, tipo="gasto"); filtradas = [t for t in transacoes if Decimal(t[2]) > 0]; await update.message.reply_text("Nenhuma saída.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💸 Saídas:\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
 
-    if msg == "🧾 Filtrar Extrato": context.user_data['aguardando_filtro'] = True; await update.message.reply_text("Selecione o período:", reply_markup=teclado_filtros_periodo()); return
+    if msg == "🗓️ Filtrar por Período": 
+        context.user_data['aguardando_filtro'] = True; await update.message.reply_text("Selecione o período:", reply_markup=teclado_filtros_periodo()); return
 
-    # ========================================================================
-    # --- NOVO BLOCO 2 (MODIFICADO): Gera teclado dinâmico de categorias ---
-    # ========================================================================
-    if msg == "📊 Filtrar por Categoria":
-        context.user_data['aguardando_filtro_categoria'] = True # Define o estado de espera
-        
-        # 1. Buscar categorias únicas do DB (usando Python)
+    # --- Lógica de Filtro por Categoria (Atualizada com novo nome) ---
+    if msg == "🏷️ Filtrar por Categoria":
+        context.user_data['aguardando_filtro_categoria'] = True 
         trans_gastos = db.get_todas(user_id=user_id, tipo="gasto")
         trans_entradas = db.get_todas(user_id=user_id, tipo="entrada")
-        
-        # t[3] é 'categoria', t[2] é 'valor_num'. Pegamos apenas categorias com valor > 0
         cats_gasto = {t[3] for t in trans_gastos if Decimal(t[2]) > 0}
         cats_entrada = {t[3] for t in trans_entradas if Decimal(t[2]) > 0}
-        
-        # Junta as categorias de entrada e saída, e ordena alfabeticamente
         categorias_unicas = sorted(list(cats_gasto.union(cats_entrada)))
-
         if not categorias_unicas:
-            # Se não houver categorias, informa o usuário e cancela a ação
-            await update.message.reply_text(
-                "Nenhuma categoria foi registrada ainda. Use o bot primeiro (ex: '50 lanche').",
-                reply_markup=teclado_flutuante(user_id) # Volta ao menu principal
-            )
-            del context.user_data['aguardando_filtro_categoria'] # Limpa o estado
-            return
+            await update.message.reply_text("Nenhuma categoria registrada ainda.", reply_markup=teclado_flutuante(user_id))
+            del context.user_data['aguardando_filtro_categoria']; return
         
-        # 2. Criar o teclado dinâmico
-        # Agrupa os botões de 2 em 2 para um layout mais limpo
-        teclado_categorias = []
-        linha_atual = []
+        teclado_categorias = []; linha_atual = []
         for cat in categorias_unicas:
             linha_atual.append(cat)
-            if len(linha_atual) == 2: # Se a linha tem 2 botões, adiciona ao teclado
-                teclado_categorias.append(linha_atual)
-                linha_atual = [] # Começa uma nova linha
-        if linha_atual: # Adiciona a última linha se ela não tiver 2 botões
-            teclado_categorias.append(linha_atual)
-        
-        teclado_categorias.append(["Cancelar"]) # Adiciona o botão "Cancelar" no final
-
-        # 3. Envia a mensagem com o novo teclado
-        await update.message.reply_text(
-            "Selecione uma categoria para filtrar:",
-            reply_markup=ReplyKeyboardMarkup(teclado_categorias, resize_keyboard=True, one_time_keyboard=True)
-        )
-        return
+            if len(linha_atual) == 2: teclado_categorias.append(linha_atual); linha_atual = []
+        if linha_atual: teclado_categorias.append(linha_atual)
+        teclado_categorias.append(["Cancelar"]) 
+        await update.message.reply_text("Selecione uma categoria para filtrar:", reply_markup=ReplyKeyboardMarkup(teclado_categorias, resize_keyboard=True, one_time_keyboard=True)); return
     # --- Fim do Bloco Modificado ---
 
-    if msg == "💳 Gastos por Cartão": texto = gastos_por_cartao(user_id); await update.message.reply_text(texto, reply_markup=teclado_flutuante(user_id)); return
-    if msg == "🧾 Saldo Geral":
+    if msg == "💳 Gastos por Cartão": 
+        texto = gastos_por_cartao(user_id); await update.message.reply_text(texto, reply_markup=teclado_flutuante(user_id)); return
+    if msg == "⚖️ Saldo Geral":
         entradas = db.get_soma(user_id, "entrada"); gastos = db.get_soma(user_id, "gasto"); saldo = entradas - gastos
         status = "🟢😀 Saudável";
         if saldo < 0: status = "🔴😟 Negativo"
         elif entradas > 0 and (gastos / entradas) > Decimal("0.7"): status = "🟠🤔 Gastos altos!"
         await update.message.reply_text((f"🧾 Saldo Geral\n💰 Entradas: R$ {formatar_valor(entradas)}\n💸 Gastos: R$ {formatar_valor(gastos)}\n📌 Saldo: R$ {formatar_valor(saldo)}\n\nStatus: {status}"), reply_markup=teclado_flutuante(user_id)); return
 
-    if msg == "📑 Gerar PDF": filename = gerar_pdf(user_id); await update.message.reply_document(open(filename, "rb"), reply_markup=teclado_flutuante(user_id)); os.remove(filename); return
-    if msg == "📊 Gerar XLSX": filename = gerar_xlsx(user_id); await update.message.reply_document(open(filename, "rb"), reply_markup=teclado_flutuante(user_id)); os.remove(filename); return
+    if msg == "📄 Gerar PDF": 
+        filename = gerar_pdf(user_id); await update.message.reply_document(open(filename, "rb"), reply_markup=teclado_flutuante(user_id)); os.remove(filename); return
+    if msg == "📈 Gerar XLSX": 
+        filename = gerar_xlsx(user_id); await update.message.reply_document(open(filename, "rb"), reply_markup=teclado_flutuante(user_id)); os.remove(filename); return
+
+    # ==========================================================
+    # --- MODIFICAÇÃO 3: Adicionar resposta "Quero um robô" ---
+    # ==========================================================
+    if msg == "🤖 Quero um robô":
+        # Assumindo que seu username do Telegram é 'maiconjbf'
+        # Se for outro, troque o link abaixo.
+        await update.message.reply_text(
+            "Ótima ideia! Eu também posso criar um robô personalizado para você ou sua empresa.\n\n"
+            "Me chame no Telegram para discutir seu projeto: 👉 https://t.me/maiconjbf",
+            reply_markup=teclado_flutuante(user_id) # Mantém o teclado principal
+        )
+        return
+    # --- Fim do Novo Bloco ---
 
     # --- Lógica Admin (Listar/Selecionar) ---
-    if msg == "👁️ Ver Usuários" and user_id == ADMIN_USER_ID: usuarios = db.listar_usuarios(); await update.message.reply_text("Nenhum usuário.", reply_markup=teclado_flutuante(user_id)) if not usuarios else await update.message.reply_text("Gerenciar usuário:", reply_markup=ReplyKeyboardMarkup([[f"{u[0]} - {u[1]}"] for u in usuarios] + [["⬅️ Voltar"]], resize_keyboard=True, one_time_keyboard=True)); return
-    if user_id == ADMIN_USER_ID and " - " in msg and msg.split(" - ")[0].isdigit(): selecionado_id = int(msg.split(" - ")[0]); selecionado_nome = msg.split(" - ")[1]; context.user_data["admin_selecionado"] = (selecionado_id, selecionado_nome); await update.message.reply_text(f"Gerenciando: {selecionado_nome}.", reply_markup=teclado_admin_usuario_selecionado()); return
+    if msg == "🧑‍💼 Ver Usuários" and user_id == ADMIN_USER_ID: 
+        usuarios = db.listar_usuarios(); await update.message.reply_text("Nenhum usuário.", reply_markup=teclado_flutuante(user_id)) if not usuarios else await update.message.reply_text("Gerenciar usuário:", reply_markup=ReplyKeyboardMarkup([[f"{u[0]} - {u[1]}"] for u in usuarios] + [["⬅️ Voltar"]], resize_keyboard=True, one_time_keyboard=True)); return
+    if user_id == ADMIN_USER_ID and " - " in msg and msg.split(" - ")[0].isdigit(): 
+        selecionado_id = int(msg.split(" - ")[0]); selecionado_nome = msg.split(" - ")[1]; context.user_data["admin_selecionado"] = (selecionado_id, selecionado_nome); await update.message.reply_text(f"Gerenciando: {selecionado_nome}.", reply_markup=teclado_admin_usuario_selecionado()); return
 
     # --- Interpretação de Mensagem (Adicionar transação) ---
     resultado = interpretar_mensagem(msg)
