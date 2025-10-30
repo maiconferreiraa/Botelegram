@@ -10,12 +10,13 @@ class Database:
         if not self.db_url:
             raise ValueError("Erro: A variável de ambiente DATABASE_URL não foi configurada.")
         
-        # 2. Em vez de conectar aqui, vamos criar as tabelas
+        # 2. Cria as tabelas se elas não existirem
         self.criar_tabelas()
 
     def _get_connection(self):
         """Helper para obter uma nova conexão (thread-safe)."""
         try:
+            # Conecta ao banco PostgreSQL usando a URL
             conn = psycopg2.connect(self.db_url)
             return conn, conn.cursor()
         except Exception as e:
@@ -32,6 +33,8 @@ class Database:
         conn, cursor = None, None
         try:
             conn, cursor = self._get_connection()
+            if not cursor: return
+
             # Tabela Usuarios (BIGINT para user_id do Telegram)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS usuarios (
@@ -41,6 +44,7 @@ class Database:
             """)
             
             # Tabela Transacoes (SERIAL para ID automático, DECIMAL para dinheiro)
+            # Mudei 'data TEXT' para 'data TIMESTAMP' para melhor performance
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS transacoes (
                     id SERIAL PRIMARY KEY,
@@ -69,6 +73,8 @@ class Database:
         conn, cursor = None, None
         try:
             conn, cursor = self._get_connection()
+            if not cursor: return
+            
             # 1. Garante usuário (Sintaxe PostgreSQL: %s e EXCLUDED.nome)
             cursor.execute("""
                 INSERT INTO usuarios (user_id, nome) VALUES (%s, %s)
@@ -92,6 +98,8 @@ class Database:
         result = None
         try:
             conn, cursor = self._get_connection()
+            if not cursor: return Decimal(0)
+            
             # Sintaxe PostgreSQL: %s e data::date para comparar datas
             query = "SELECT SUM(valor_num) FROM transacoes WHERE tipo=%s AND user_id=%s"
             params = [tipo, user_id]
@@ -115,7 +123,8 @@ class Database:
         results = []
         try:
             conn, cursor = self._get_connection()
-            # Sintaxe PostgreSQL: %s e data::date
+            if not cursor: return []
+            
             query = "SELECT id, tipo, valor_num, categoria, metodo, cartao, data FROM transacoes WHERE 1=1"
             params = []
             if tipo:
@@ -144,9 +153,10 @@ class Database:
         conn, cursor = None, None
         try:
             conn, cursor = self._get_connection()
+            if not cursor: return
+            
             now = datetime.now()
             if opcao == "ultimo":
-                # A lógica de "get_todas" já foi corrigida
                 transacoes = self.get_todas(user_id=user_id) 
                 if transacoes:
                     ultima_id = transacoes[0][0] 
@@ -174,6 +184,8 @@ class Database:
         results = []
         try:
             conn, cursor = self._get_connection()
+            if not cursor: return []
+            
             cursor.execute("SELECT user_id, nome FROM usuarios ORDER BY nome ASC")
             results = [(row[0], row[1] or f"Usuário {row[0]}") for row in cursor.fetchall()]
         except Exception as e:
@@ -187,6 +199,8 @@ class Database:
         results = []
         try:
             conn, cursor = self._get_connection()
+            if not cursor: return []
+            
             query = "SELECT categoria, SUM(valor_num) FROM transacoes WHERE tipo='gasto'"
             params = []
             if user_id is not None:
@@ -210,23 +224,13 @@ class Database:
     def series_mensais(self, user_id=None, meses=6):
         # Esta função não usa SQL diretamente, apenas chama get_soma,
         # que já foi corrigido. Nenhuma mudança é necessária aqui.
-        hoje = datetime.now()
-        labels = []
-        entradas_vals = []
-        gastos_vals = []
-
+        hoje = datetime.now(); labels = []; entradas_vals = []; gastos_vals = []
         for i in reversed(range(meses)):
-            mes_alvo = hoje.month - i
-            ano_alvo = hoje.year
-            if mes_alvo <= 0:
-                mes_alvo += 12
-                ano_alvo -= 1
+            mes_alvo = hoje.month - i; ano_alvo = hoje.year
+            if mes_alvo <= 0: mes_alvo += 12; ano_alvo -= 1
             primeiro_dia = datetime(ano_alvo, mes_alvo, 1)
-            prox_mes = mes_alvo + 1
-            prox_ano = ano_alvo
-            if prox_mes > 12:
-                prox_mes = 1
-                prox_ano += 1
+            prox_mes = mes_alvo + 1; prox_ano = ano_alvo
+            if prox_mes > 12: prox_mes = 1; prox_ano += 1
             ultimo_dia = datetime(prox_ano, prox_mes, 1) - timedelta(days=1)
             labels.append(primeiro_dia.strftime("%b/%Y"))
             soma_entrada = self.get_soma(user_id, "entrada", inicio=primeiro_dia, fim=ultimo_dia)
@@ -240,6 +244,8 @@ class Database:
         results = []
         try:
             conn, cursor = self._get_connection()
+            if not cursor: return []
+            
             query = "SELECT cartao, SUM(valor_num) FROM transacoes WHERE tipo='gasto' AND cartao IS NOT NULL"
             params = []
             if user_id is not None:
