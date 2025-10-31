@@ -403,10 +403,8 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if msg == "🧑‍💼 Ver Usuários" and user_id == ADMIN_USER_ID: 
         # MODIFICAÇÃO IMPORTANTE AQUI:
-        # Pega a lista de IDs (ex: [123, 456])
-        lista_ids = db.listar_usuarios() 
-        # Pega a lista de (ID, Nome) que o seu código antigo esperava
-        lista_id_nome = db.listar_usuarios_com_nome() # <--- PRECISAMOS ADICIONAR ESTA FUNÇÃO NO DB.PY
+        # Pega a lista de (ID, Nome) que o seu código espera
+        lista_id_nome = db.listar_usuarios_com_nome() # <--- CHAMA A NOVA FUNÇÃO
         
         if not lista_id_nome: 
             await update.message.reply_text("Nenhum usuário.", reply_markup=teclado_flutuante(user_id)); return
@@ -474,44 +472,20 @@ async def send_broadcast(bot: Bot, message: str):
 # ========================================================
 # --- NOVA LÓGICA DE INICIALIZAÇÃO (main) ---
 # ========================================================
-async def main_async_logic(app: Application):
-    """Lógica async: checa broadcast e inicia polling."""
-    
-    # 1. Checar broadcast
-    # RENDER_GIT_COMMIT é uma variável de ambiente que o Render injeta
-    current_commit = os.environ.get("RENDER_GIT_COMMIT")
-    last_commit_sent = db.get_config("last_commit_hash")
-    
-    print(f"Commit Atual (Render): {current_commit}")
-    print(f"Último Commit (Banco): {last_commit_sent}")
-
-    if current_commit and (current_commit != last_commit_sent):
-        print("Detectado novo deploy! Enviando broadcast...")
-        # O bot está inicializado, podemos usar app.bot
-        await send_broadcast(app.bot, BROADCAST_MESSAGE)
-        # Salva o novo commit no banco para não enviar de novo
-        db.set_config("last_commit_hash", current_commit)
-        print("Broadcast enviado e hash salvo.")
-    else:
-        print("Inicialização normal (sem broadcast).")
-        
-    # 2. Iniciar polling (com o argumento correto para threads)
-    print("Iniciando Polling do bot...")
-    # Esta é a função correta que aceita 'stop_signals'
-    await app.run_polling(stop_signals=None)
-
-def run_telegram_bot_thread(app):
+# Esta é a função alvo da THREAD 2 (BOT)
+def run_telegram_bot_thread(app: Application):
     """Função alvo da Thread: cria um loop asyncio e roda a lógica principal."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    print("🤖 Bot do Telegram iniciando polling em background...")
     try:
-        loop.run_until_complete(main_async_logic(app))
+        # Roda o polling (que gerencia seu próprio loop)
+        app.run_polling(stop_signals=None) 
     except Exception as e:
-        print(f"Erro fatal na thread do bot: {e}")
-    finally:
-        loop.close()
+        print(f"!!! ERRO FATAL NO POLLING: {e} !!!")
 
-def run_flask():
+# Esta é a função alvo da THREAD 1 (WEB)
+def run_flask(app_flask):
     """Roda o Flask (Waitress) na thread principal (bloqueando)."""
     print("\n--- INICIANDO FLASK (Waitress) ---")
     try:
@@ -529,22 +503,43 @@ def run_flask():
 if __name__ == "__main__":
     TOKEN = os.environ.get('BOT_TOKEN')
     app = None 
+    app_flask = Flask('') # Define o app_flask globalmente
+
+    @app_flask.route('/')
+    def home(): return "Estou vivo!"
 
     if not TOKEN:
         print("ERRO CRÍTICO: Token não encontrado.")
     else:
-        app_flask = Flask('')
-        @app_flask.route('/')
-        def home(): return "Estou vivo!"
-
         app = Application.builder().token(TOKEN).build()
         app.add_handler(CommandHandler("start", start))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
         print("🤖 Bot configurado.")
 
-        # 1. Inicia a lógica do bot (async + broadcast) em uma thread separada
+        # --- LÓGICA DE BROADCAST (Roda Sincronamente ANTES de iniciar) ---
+        try:
+            current_commit = os.environ.get("RENDER_GIT_COMMIT")
+            last_commit_sent = db.get_config("last_commit_hash")
+            
+            print(f"Commit Atual (Render): {current_commit}")
+            print(f"Último Commit (Banco): {last_commit_sent}")
+
+            if current_commit and (current_commit != last_commit_sent):
+                print("Detectado novo deploy! Enviando broadcast...")
+                temp_bot = Bot(token=TOKEN)
+                # Roda a função async 'send_broadcast' de forma síncrona
+                asyncio.run(send_broadcast(temp_bot, BROADCAST_MESSAGE)) 
+                db.set_config("last_commit_hash", current_commit)
+                print("Broadcast enviado e hash salvo.")
+            else:
+                print("Inicialização normal (sem broadcast).")
+        except Exception as e:
+            print(f"Erro durante a verificação de broadcast: {e}")
+        # --- Fim da lógica de broadcast ---
+
+        # 1. Inicia a lógica do bot (Polling) em uma thread separada
         bot_thread = Thread(target=run_telegram_bot_thread, args=(app,), daemon=True)
         bot_thread.start()
         
         # 2. Roda o Flask (bloqueando) na thread principal
-        run_flask()
+        run_flask(app_flask)

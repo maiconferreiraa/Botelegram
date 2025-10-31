@@ -230,6 +230,21 @@ class Database:
         finally:
             self._close_connection(conn, cursor)
         return results # Retorna [123, 456, 789]
+        
+    def listar_usuarios_com_nome(self):
+        """Função separada para o Admin, retorna (ID, Nome)."""
+        conn, cursor = None, None
+        results = []
+        try:
+            conn, cursor = self._get_connection()
+            if not cursor: return []
+            cursor.execute("SELECT user_id, nome FROM usuarios ORDER BY nome ASC")
+            results = [(row[0], row[1] or f"Usuário {row[0]}") for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"Erro em listar_usuarios_com_nome: {e}")
+        finally:
+            self._close_connection(conn, cursor)
+        return results
 
     def gastos_por_categoria(self, user_id=None, inicio=None, fim=None):
         conn, cursor = None, None
