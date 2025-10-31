@@ -1,5 +1,5 @@
-import psycopg2 # Substitui o sqlite3
-import os       # Para ler a DATABASE_URL
+import psycopg2 
+import os
 from decimal import Decimal
 from datetime import datetime, timedelta
 
@@ -12,10 +12,9 @@ class Database:
         # Cria todas as tabelas no início
         self.criar_tabela_usuarios()
         self.criar_tabela_transacoes()
-        self.criar_tabela_config() # <-- NOVA TABELA
+        self.criar_tabela_config()
 
     def _get_connection(self):
-        """Helper para obter uma nova conexão (thread-safe)."""
         try:
             conn = psycopg2.connect(self.db_url)
             return conn, conn.cursor()
@@ -24,7 +23,6 @@ class Database:
             return None, None
 
     def _close_connection(self, conn, cursor):
-        """Helper para fechar conexões."""
         if cursor: cursor.close()
         if conn: conn.close()
         
@@ -70,7 +68,6 @@ class Database:
         finally:
             self._close_connection(conn, cursor)
             
-    # --- NOVO: Tabela de Configuração ---
     def criar_tabela_config(self):
         conn, cursor = None, None
         try:
@@ -88,7 +85,6 @@ class Database:
         finally:
             self._close_connection(conn, cursor)
 
-    # --- NOVO: Pegar valor de configuração ---
     def get_config(self, key):
         conn, cursor = None, None
         result = None
@@ -105,7 +101,6 @@ class Database:
             self._close_connection(conn, cursor)
         return result
 
-    # --- NOVO: Definir valor de configuração ---
     def set_config(self, key, value):
         conn, cursor = None, None
         try:
@@ -215,19 +210,26 @@ class Database:
         finally:
             self._close_connection(conn, cursor)
 
+    # ========================================================
+    # --- MODIFICAÇÃO AQUI ---
+    # ========================================================
     def listar_usuarios(self):
+        """Retorna uma LISTA DE IDs de usuários (ex: [123, 456])."""
         conn, cursor = None, None
         results = []
         try:
             conn, cursor = self._get_connection()
             if not cursor: return []
-            cursor.execute("SELECT user_id, nome FROM usuarios ORDER BY nome ASC")
-            results = [(row[0], row[1] or f"Usuário {row[0]}") for row in cursor.fetchall()]
+            
+            # Retorna apenas o ID, que é tudo que o broadcast precisa
+            cursor.execute("SELECT user_id FROM usuarios ORDER BY user_id ASC")
+            # Converte a lista de tuplas [(123,), (456,)] em uma lista simples [123, 456]
+            results = [row[0] for row in cursor.fetchall()]
         except Exception as e:
             print(f"Erro em listar_usuarios: {e}")
         finally:
             self._close_connection(conn, cursor)
-        return results
+        return results # Retorna [123, 456, 789]
 
     def gastos_por_categoria(self, user_id=None, inicio=None, fim=None):
         conn, cursor = None, None

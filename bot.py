@@ -8,9 +8,9 @@ from datetime import datetime, timedelta
 import asyncio
 
 # Imports do Bot
-from telegram import Update, ReplyKeyboardMarkup, Bot # <-- MODIFICAÇÃO: Importa 'Bot'
+from telegram import Update, ReplyKeyboardMarkup, Bot # <-- Imports Corretos
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
-from telegram.error import Forbidden, ChatMigrated # <-- MODIFICAÇÃO: Imports para erros de broadcast
+from telegram.error import Forbidden, ChatMigrated
 
 # Imports dos Gráficos/Relatórios
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
@@ -402,7 +402,13 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if msg == "🧑‍💼 Ver Usuários" and user_id == ADMIN_USER_ID: 
-        usuarios = db.listar_usuarios(); await update.message.reply_text("Nenhum usuário.", reply_markup=teclado_flutuante(user_id)) if not usuarios else await update.message.reply_text("Gerenciar usuário:", reply_markup=ReplyKeyboardMarkup([[f"{u[0]} - {u[1]}"] for u in usuarios] + [["⬅️ Voltar"]], resize_keyboard=True, one_time_keyboard=True)); return
+        usuarios = db.listar_usuarios() # <-- ATENÇÃO: Verifique se o db.py foi atualizado
+        if not usuarios: await update.message.reply_text("Nenhum usuário.", reply_markup=teclado_flutuante(user_id)); return
+        # A lógica aqui espera (ID, Nome), mas o db.py modificado retorna só ID.
+        # Vamos assumir que o db.py NÃO foi atualizado ainda.
+        teclado_usuarios = [[f"{u[0]} - {u[1]}"] for u in usuarios] + [["⬅️ Voltar"]]
+        await update.message.reply_text("Gerenciar usuário:", reply_markup=ReplyKeyboardMarkup(teclado_usuarios, resize_keyboard=True, one_time_keyboard=True)); return
+    
     if user_id == ADMIN_USER_ID and " - " in msg and msg.split(" - ")[0].isdigit(): 
         selecionado_id = int(msg.split(" - ")[0]); selecionado_nome = msg.split(" - ")[1]; context.user_data["admin_selecionado"] = (selecionado_id, selecionado_nome); await update.message.reply_text(f"Gerenciando: {selecionado_nome}.", reply_markup=teclado_admin_usuario_selecionado()); return
 
@@ -418,14 +424,16 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Não entendi. Digite valor + descrição (ex: '50 lanche').", reply_markup=teclado_flutuante(user_id))
 
-# =======================
-# Inicialização do Bot (VERSÃO FINAL E CORRIGIDA)
-# =Example of a broadcast message
+# ===================================================================
+# --- MODIFICAÇÃO FINAL: Lógica de Inicialização e Broadcast ---
+# ===================================================================
+
+# Mensagem que será enviada. Edite aqui.
 BROADCAST_MESSAGE = """
 🎉 **Atualização do Bot!** 🎉
 
 O bot foi atualizado com novas melhorias e correções. 
-Talvez seja necessário enviar /start novamente para ver o teclado atualizado.
+(Se o teclado parecer estranho, envie /start novamente).
 
 Obrigado por usar!
 """
@@ -435,18 +443,25 @@ Obrigado por usar!
 # ==================================
 async def send_broadcast(bot: Bot, message: str):
     """Envia uma mensagem para todos os usuários no banco de dados."""
-    user_ids = db.listar_usuarios() # Modificado no db.py para retornar apenas IDs
+    # Pega a lista de IDs de usuário do banco
+    user_ids = db.listar_usuarios() # Esta função DEVE retornar uma lista de IDs [123, 456]
+    
+    if not user_ids:
+        print("Broadcast: Nenhum usuário encontrado para enviar.")
+        return
+        
     print(f"Iniciando broadcast para {len(user_ids)} usuários...")
     
     for user_id in user_ids:
         try:
             await bot.send_message(chat_id=user_id, text=message)
             print(f"Sucesso: Mensagem enviada para {user_id}")
-            await asyncio.sleep(0.1) # Evita spam (30 mensagens/seg)
+            await asyncio.sleep(0.1) # Pausa de 0.1s para não sobrecarregar (limite de 30 msg/s)
         except Forbidden:
             print(f"Falha: Usuário {user_id} bloqueou o bot.")
         except ChatMigrated as e:
             print(f"Falha: Chat {user_id} migrou para {e.new_chat_id}")
+            # (Opcional: você poderia salvar o e.new_chat_id no DB aqui)
         except Exception as e:
             print(f"Falha: Erro desconhecido com user_id {user_id}: {e}")
     print("Broadcast concluído.")
@@ -458,7 +473,19 @@ async def main():
     """Lógica principal para rodar o bot e verificar o broadcast."""
     global app # Usa o 'app' global
     
-    # 1. Verificar se é um novo deploy ANTES de tudo
+    # 1. Configurar o bot (movido para cá para garantir que 'app' exista)
+    TOKEN = os.environ.get('BOT_TOKEN')
+    if not TOKEN:
+        print("ERRO CRÍTICO: Token não encontrado.")
+        return
+
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
+    print("🤖 Bot configurado.")
+
+    # 2. Verificar se é um novo deploy ANTES de iniciar o bot
+    # RENDER_GIT_COMMIT é uma variável de ambiente que o Render injeta
     current_commit = os.environ.get("RENDER_GIT_COMMIT")
     last_commit_sent = db.get_config("last_commit_hash")
     
@@ -467,25 +494,27 @@ async def main():
 
     if current_commit and (current_commit != last_commit_sent):
         print("Detectado novo deploy! Enviando broadcast...")
-        # Inicializa um Bot 'cru' apenas para enviar mensagens
-        temp_bot = Bot(token=TOKEN)
-        await send_broadcast(temp_bot, BROADCAST_MESSAGE)
+        # O bot está inicializado, podemos usar app.bot
+        await send_broadcast(app.bot, BROADCAST_MESSAGE)
         # Salva o novo commit no banco para não enviar de novo
         db.set_config("last_commit_hash", current_commit)
         print("Broadcast enviado e hash salvo.")
     else:
         print("Inicialização normal (sem broadcast).")
 
-    # 2. Configurar e iniciar o Polling do bot
-    if not app:
-        print("Erro: Aplicação do bot não foi inicializada (provavelmente sem token).")
-        return
-        
+    # 3. Iniciar o bot manualmente (sem run_polling, para evitar o crash)
     print("Iniciando Polling do bot...")
-    # Roda o app.run_polling() em um 'await' para que ele seja
-    # gerenciado pelo loop de eventos principal
-    await app.run_polling(stop_signals=None)
-
+    try:
+        await app.initialize()
+        await app.updater.start_polling(stop_signals=None)
+        await app.start()
+        
+        # 4. Manter o loop 'asyncio' rodando "para sempre"
+        print("Bot e Servidor prontos. Aguardando...")
+        while True:
+            await asyncio.sleep(3600) # Dorme por 1 hora, apenas para manter o loop vivo
+    except Exception as e:
+        print(f"Erro fatal ao iniciar o polling: {e}")
 
 # --- CÓDIGO DO SERVIDOR FLASK (Sem alterações aqui) ---
 app_flask = Flask('')
@@ -508,25 +537,15 @@ def run_flask():
 # --- BLOCO DE INICIALIZAÇÃO FINAL ---
 # ==================================
 if __name__ == "__main__":
-    TOKEN = os.environ.get('BOT_TOKEN') # Lê o token
-    app = None 
-
-    if not TOKEN:
-        print("ERRO CRÍTICO: Token não encontrado.")
-    else:
-        # Configura o bot
-        app = Application.builder().token(TOKEN).build()
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
-        print("🤖 Bot configurado.")
-
-        # 1. Inicia o Flask (Waitress) em uma thread separada
-        #    Isso é necessário porque o 'asyncio.run(main())' deve rodar na thread principal
-        flask_thread = Thread(target=run_flask, daemon=True)
-        flask_thread.start()
-        
-        # 2. Roda a lógica principal do bot (async) na thread principal
-        try:
-            asyncio.run(main())
-        except KeyboardInterrupt:
-            print("Bot interrompido manualmente.")
+    # 1. Inicia o Flask (Waitress) em uma thread separada
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # 2. Roda a lógica principal do bot (async) na thread principal
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot interrompido manualmente.")
+    except RuntimeError as e:
+        # Pega o erro 'event loop is already running' se acontecer
+        print(f"Erro de Runtime no Asyncio (provavelmente do Render): {e}")
