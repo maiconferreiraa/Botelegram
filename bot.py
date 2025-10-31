@@ -52,7 +52,36 @@ MAPEAMENTO_CATEGORIAS = {
     "Salário": ["salário", "salario", "pagamento", "holerite"],
     "Vendas": ["venda", "cliente", "recebimento", "comissao", "serviço", "cliente pagou"],
     "Investimentos": ["investimento", "ação", "ações", "b3", "fundo", "tesouro", "cdb", "cripto", "resgate", "dividendo", "jcp"],
-    "Outras Entradas": ["entrada", "ganhei", "recebi", "pix", "reembolso", "presente"]
+    "Outras Entradas": ["entrada", "ganhei", "recebi", "pix", "reembolso", "presente"],
+    # ... (outras categorias, como "Pets") ...
+    
+    # --- NOVA CATEGORIA ---
+    "Compras Online": [
+        # Marketplaces
+        "amazon", "mercadolivre", "mercado livre", "shopee", "aliexpress", 
+        "ebay", "olx", "enjoei",
+
+        # Varejistas
+        "magalu", "magazine luiza", "casas bahia", "pontofrio", "ponto",
+        "kabum", "pichau", "terabyte", "fast shop",
+
+        # Roupas/Moda (se você preferir aqui do que em "Vestuário")
+        "shein", "dafiti", "zattini", "renner", "cea", "zara",
+
+        # Outros
+        "compra online", "pedido online", "frete", "importação", "dropshipping"
+    ],
+    "Serviços Digitais": [
+        # Software e Apps
+        "appstore", "google play", "playstore", "licença", "software", 
+        "antivirus", "canva", "adobe",
+
+        # Assinaturas (Não-Lazer)
+        "hospedagem", "hostgator", "hostinger", "dominio", "vps", "aws", 
+        "icloud", "google drive", "google one", "dropbox", "office 365",
+        "chatgpt", "midjourney"
+    ],
+    
 }
 
 # =======================
