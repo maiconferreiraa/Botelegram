@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import asyncio
 
 # Imports do Bot
-from telegram import Update, ReplyKeyboardMarkup, Bot # <-- Imports Corretos
+from telegram import Update, ReplyKeyboardMarkup, Bot
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 from telegram.error import Forbidden, ChatMigrated
 
@@ -402,11 +402,16 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if msg == "🧑‍💼 Ver Usuários" and user_id == ADMIN_USER_ID: 
-        usuarios = db.listar_usuarios() # <-- ATENÇÃO: Verifique se o db.py foi atualizado
-        if not usuarios: await update.message.reply_text("Nenhum usuário.", reply_markup=teclado_flutuante(user_id)); return
-        # A lógica aqui espera (ID, Nome), mas o db.py modificado retorna só ID.
-        # Vamos assumir que o db.py NÃO foi atualizado ainda.
-        teclado_usuarios = [[f"{u[0]} - {u[1]}"] for u in usuarios] + [["⬅️ Voltar"]]
+        # MODIFICAÇÃO IMPORTANTE AQUI:
+        # Pega a lista de IDs (ex: [123, 456])
+        lista_ids = db.listar_usuarios() 
+        # Pega a lista de (ID, Nome) que o seu código antigo esperava
+        lista_id_nome = db.listar_usuarios_com_nome() # <--- PRECISAMOS ADICIONAR ESTA FUNÇÃO NO DB.PY
+        
+        if not lista_id_nome: 
+            await update.message.reply_text("Nenhum usuário.", reply_markup=teclado_flutuante(user_id)); return
+        
+        teclado_usuarios = [[f"{u[0]} - {u[1]}"] for u in lista_id_nome] + [["⬅️ Voltar"]]
         await update.message.reply_text("Gerenciar usuário:", reply_markup=ReplyKeyboardMarkup(teclado_usuarios, resize_keyboard=True, one_time_keyboard=True)); return
     
     if user_id == ADMIN_USER_ID and " - " in msg and msg.split(" - ")[0].isdigit(): 
@@ -469,22 +474,10 @@ async def send_broadcast(bot: Bot, message: str):
 # ========================================================
 # --- NOVA LÓGICA DE INICIALIZAÇÃO (main) ---
 # ========================================================
-async def main():
-    """Lógica principal para rodar o bot e verificar o broadcast."""
-    global app # Usa o 'app' global
+async def main_async_logic(app: Application):
+    """Lógica async: checa broadcast e inicia polling."""
     
-    # 1. Configurar o bot (movido para cá para garantir que 'app' exista)
-    TOKEN = os.environ.get('BOT_TOKEN')
-    if not TOKEN:
-        print("ERRO CRÍTICO: Token não encontrado.")
-        return
-
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
-    print("🤖 Bot configurado.")
-
-    # 2. Verificar se é um novo deploy ANTES de iniciar o bot
+    # 1. Checar broadcast
     # RENDER_GIT_COMMIT é uma variável de ambiente que o Render injeta
     current_commit = os.environ.get("RENDER_GIT_COMMIT")
     last_commit_sent = db.get_config("last_commit_hash")
@@ -501,28 +494,25 @@ async def main():
         print("Broadcast enviado e hash salvo.")
     else:
         print("Inicialização normal (sem broadcast).")
-
-    # 3. Iniciar o bot manualmente (sem run_polling, para evitar o crash)
-    print("Iniciando Polling do bot...")
-    try:
-        await app.initialize()
-        await app.updater.start_polling(stop_signals=None)
-        await app.start()
         
-        # 4. Manter o loop 'asyncio' rodando "para sempre"
-        print("Bot e Servidor prontos. Aguardando...")
-        while True:
-            await asyncio.sleep(3600) # Dorme por 1 hora, apenas para manter o loop vivo
-    except Exception as e:
-        print(f"Erro fatal ao iniciar o polling: {e}")
+    # 2. Iniciar polling (com o argumento correto para threads)
+    print("Iniciando Polling do bot...")
+    # Esta é a função correta que aceita 'stop_signals'
+    await app.run_polling(stop_signals=None)
 
-# --- CÓDIGO DO SERVIDOR FLASK (Sem alterações aqui) ---
-app_flask = Flask('')
-@app_flask.route('/')
-def home(): return "Estou vivo!"
+def run_telegram_bot_thread(app):
+    """Função alvo da Thread: cria um loop asyncio e roda a lógica principal."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(main_async_logic(app))
+    except Exception as e:
+        print(f"Erro fatal na thread do bot: {e}")
+    finally:
+        loop.close()
 
 def run_flask():
-    """Roda o Flask (Waitress) na thread principal."""
+    """Roda o Flask (Waitress) na thread principal (bloqueando)."""
     print("\n--- INICIANDO FLASK (Waitress) ---")
     try:
         from waitress import serve
@@ -537,15 +527,24 @@ def run_flask():
 # --- BLOCO DE INICIALIZAÇÃO FINAL ---
 # ==================================
 if __name__ == "__main__":
-    # 1. Inicia o Flask (Waitress) em uma thread separada
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    # 2. Roda a lógica principal do bot (async) na thread principal
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Bot interrompido manualmente.")
-    except RuntimeError as e:
-        # Pega o erro 'event loop is already running' se acontecer
-        print(f"Erro de Runtime no Asyncio (provavelmente do Render): {e}")
+    TOKEN = os.environ.get('BOT_TOKEN')
+    app = None 
+
+    if not TOKEN:
+        print("ERRO CRÍTICO: Token não encontrado.")
+    else:
+        app_flask = Flask('')
+        @app_flask.route('/')
+        def home(): return "Estou vivo!"
+
+        app = Application.builder().token(TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
+        print("🤖 Bot configurado.")
+
+        # 1. Inicia a lógica do bot (async + broadcast) em uma thread separada
+        bot_thread = Thread(target=run_telegram_bot_thread, args=(app,), daemon=True)
+        bot_thread.start()
+        
+        # 2. Roda o Flask (bloqueando) na thread principal
+        run_flask()
