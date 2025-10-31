@@ -8,9 +8,9 @@ from datetime import datetime, timedelta
 import asyncio
 
 # Imports do Bot
-from telegram import Update, ReplyKeyboardMarkup, Bot # <-- Import 'Bot'
+from telegram import Update, ReplyKeyboardMarkup, Bot # <-- MODIFICAÇÃO: Importa 'Bot'
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
-from telegram.error import Forbidden, ChatMigrated # <-- Imports para erros de broadcast
+from telegram.error import Forbidden, ChatMigrated # <-- MODIFICAÇÃO: Imports para erros de broadcast
 
 # Imports dos Gráficos/Relatórios
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
@@ -36,6 +36,7 @@ ADMIN_USER_ID = 853716041 # ID @maiconjbf
 # --- MAPEAMENTO DE CATEGORIAS (Sem alteração) ---
 # ===================================================================
 MAPEAMENTO_CATEGORIAS = {
+    # --- GASTOS ---
     "Alimentação": ["supermercado", "mercado", "lanche", "churrasco", "restaurante", "ifood", "rappi", "padaria", "açougue", "hortifruti", "pizza", "comida", "jantar", "almoço", "café", "bebida"],
     "Transporte": ["gasolina", "uber", "99", "estacionamento", "ipva", "seguro", "carro", "manutenção", "onibus", "metrô", "passagem", "combustível", "pedagio", "taxi", "aplicativo", "app"],
     "Moradia": ["aluguel", "condomínio", "iptu", "luz", "água", "internet", "gás", "diarista", "faxina", "energia", "net", "claro", "vivo", "oi", "tim", "conserto", "reparo", "internet celular", "celular internet"],
@@ -124,6 +125,7 @@ def teclado_flutuante(user_id):
     status = "🟢😀 Finanças Saudáveis"
     if saldo < 0: status = "🔴😟 Saldo Negativo"
     elif entradas > 0 and (gastos / entradas) > Decimal("0.7"): status = "🟠🤔 Gastos altos!"
+    
     teclado = [
         [status],
         ["⚖️ Saldo Geral", "💳 Gastos por Cartão"],
@@ -133,7 +135,8 @@ def teclado_flutuante(user_id):
         ["📄 Gerar PDF", "📈 Gerar XLSX", "🗑️ Resetar Valores"],
         ["🤖 Quero um robô"]
     ]
-    if user_id == ADMIN_USER_ID: teclado.append(["🧑‍💼 Ver Usuários"])
+    if user_id == ADMIN_USER_ID: 
+        teclado.append(["🧑‍💼 Ver Usuários"])
     return ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=False)
 
 def teclado_admin_usuario_selecionado():
@@ -315,7 +318,7 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Saldo de {selecionado_nome}\n💰 Entradas: R$ {formatar_valor(entradas)}\n💸 Gastos: R$ {formatar_valor(gastos)}\n📌 Saldo: R$ {formatar_valor(saldo)}", reply_markup=teclado_admin_usuario_selecionado())
         elif msg == "📑 Gerar PDF": 
             filename = gerar_pdf(selecionado_id, f"rel_{selecionado_id}.pdf"); await update.message.reply_document(open(filename, "rb"), caption=f"PDF de {selecionado_nome}", reply_markup=teclado_admin_usuario_selecionado()); os.remove(filename)
-        elif msg == "📊 Gerar XLSX": # <-- MUDANÇA DE EMOJI AQUI NO CÓDIGO DO ADMIN (ERA 📑)
+        elif msg == "📊 Gerar XLSX": 
             filename = gerar_xlsx(selecionado_id, f"rel_{selecionado_id}.xlsx"); await update.message.reply_document(open(filename, "rb"), caption=f"XLSX de {selecionado_nome}", reply_markup=teclado_admin_usuario_selecionado()); os.remove(filename)
         else: 
             await update.message.reply_text("Inválido.", reply_markup=teclado_admin_usuario_selecionado())
@@ -416,33 +419,82 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Não entendi. Digite valor + descrição (ex: '50 lanche').", reply_markup=teclado_flutuante(user_id))
 
 # =======================
-# Inicialização do Bot (VERSÃO FINAL E CORRIGIDA - Sem alterações aqui)
-# =======================
-TOKEN = os.environ.get('BOT_TOKEN') # Lê o token dos "Secrets"
-app = None # Variável global para o app do Telegram
-if not TOKEN: print("ERRO CRÍTICO: Token não encontrado.")
-else:
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
-    print("🤖 Bot configurado.")
+# Inicialização do Bot (VERSÃO FINAL E CORRIGIDA)
+# =Example of a broadcast message
+BROADCAST_MESSAGE = """
+🎉 **Atualização do Bot!** 🎉
+
+O bot foi atualizado com novas melhorias e correções. 
+Talvez seja necessário enviar /start novamente para ver o teclado atualizado.
+
+Obrigado por usar!
+"""
+
+# ==================================
+# --- NOVA FUNÇÃO DE BROADCAST ---
+# ==================================
+async def send_broadcast(bot: Bot, message: str):
+    """Envia uma mensagem para todos os usuários no banco de dados."""
+    user_ids = db.listar_usuarios() # Modificado no db.py para retornar apenas IDs
+    print(f"Iniciando broadcast para {len(user_ids)} usuários...")
+    
+    for user_id in user_ids:
+        try:
+            await bot.send_message(chat_id=user_id, text=message)
+            print(f"Sucesso: Mensagem enviada para {user_id}")
+            await asyncio.sleep(0.1) # Evita spam (30 mensagens/seg)
+        except Forbidden:
+            print(f"Falha: Usuário {user_id} bloqueou o bot.")
+        except ChatMigrated as e:
+            print(f"Falha: Chat {user_id} migrou para {e.new_chat_id}")
+        except Exception as e:
+            print(f"Falha: Erro desconhecido com user_id {user_id}: {e}")
+    print("Broadcast concluído.")
+
+# ========================================================
+# --- NOVA LÓGICA DE INICIALIZAÇÃO (main) ---
+# ========================================================
+async def main():
+    """Lógica principal para rodar o bot e verificar o broadcast."""
+    global app # Usa o 'app' global
+    
+    # 1. Verificar se é um novo deploy ANTES de tudo
+    current_commit = os.environ.get("RENDER_GIT_COMMIT")
+    last_commit_sent = db.get_config("last_commit_hash")
+    
+    print(f"Commit Atual (Render): {current_commit}")
+    print(f"Último Commit (Banco): {last_commit_sent}")
+
+    if current_commit and (current_commit != last_commit_sent):
+        print("Detectado novo deploy! Enviando broadcast...")
+        # Inicializa um Bot 'cru' apenas para enviar mensagens
+        temp_bot = Bot(token=TOKEN)
+        await send_broadcast(temp_bot, BROADCAST_MESSAGE)
+        # Salva o novo commit no banco para não enviar de novo
+        db.set_config("last_commit_hash", current_commit)
+        print("Broadcast enviado e hash salvo.")
+    else:
+        print("Inicialização normal (sem broadcast).")
+
+    # 2. Configurar e iniciar o Polling do bot
+    if not app:
+        print("Erro: Aplicação do bot não foi inicializada (provavelmente sem token).")
+        return
+        
+    print("Iniciando Polling do bot...")
+    # Roda o app.run_polling() em um 'await' para que ele seja
+    # gerenciado pelo loop de eventos principal
+    await app.run_polling(stop_signals=None)
+
 
 # --- CÓDIGO DO SERVIDOR FLASK (Sem alterações aqui) ---
 app_flask = Flask('')
 @app_flask.route('/')
 def home(): return "Estou vivo!"
 
-def run_telegram_bot():
-    print("🤖 Bot do Telegram rodando em background.")
-    try: app.run_polling(stop_signals=None)
-    except Exception as e: print(f"!!! ERRO FATAL NO POLLING: {e} !!!")
-
-def run_flask_and_bot():
-    if not app: return
-    print("Iniciando Bot e Servidor...")
-    thread_bot = Thread(target=run_telegram_bot, daemon=True)
-    thread_bot.start()
-    print("\n--- INICIANDO FLASK ---")
+def run_flask():
+    """Roda o Flask (Waitress) na thread principal."""
+    print("\n--- INICIANDO FLASK (Waitress) ---")
     try:
         from waitress import serve
         print("--- Waitress na porta 8080 ---")
@@ -452,5 +504,29 @@ def run_flask_and_bot():
         app_flask.run(host='0.0.0.0', port=8080)
     except Exception as e: print(f"!!! ERRO FLASK: {e} !!!")
 
+# ==================================
+# --- BLOCO DE INICIALIZAÇÃO FINAL ---
+# ==================================
 if __name__ == "__main__":
-    run_flask_and_bot()
+    TOKEN = os.environ.get('BOT_TOKEN') # Lê o token
+    app = None 
+
+    if not TOKEN:
+        print("ERRO CRÍTICO: Token não encontrado.")
+    else:
+        # Configura o bot
+        app = Application.builder().token(TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
+        print("🤖 Bot configurado.")
+
+        # 1. Inicia o Flask (Waitress) em uma thread separada
+        #    Isso é necessário porque o 'asyncio.run(main())' deve rodar na thread principal
+        flask_thread = Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        
+        # 2. Roda a lógica principal do bot (async) na thread principal
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            print("Bot interrompido manualmente.")
