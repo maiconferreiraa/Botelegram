@@ -6,6 +6,7 @@ import decimal
 from decimal import Decimal
 from datetime import datetime, timedelta
 import asyncio
+import pytz # <-- MODIFICAÇÃO: Importa biblioteca de fuso horário
 
 # Imports do Bot
 from telegram import Update, ReplyKeyboardMarkup, Bot
@@ -36,7 +37,7 @@ ADMIN_USER_ID = 853716041 # ID @maiconjbf
 # --- MAPEAMENTO DE CATEGORIAS (Sem alteração) ---
 # ===================================================================
 MAPEAMENTO_CATEGORIAS = {
-    # --- GASTOS ---
+    # ... (Seu mapeamento de categorias completo fica aqui - omitido por brevidade) ...
     "Alimentação": ["supermercado", "mercado", "lanche", "churrasco", "restaurante", "ifood", "rappi", "padaria", "açougue", "hortifruti", "pizza", "comida", "jantar", "almoço", "café", "bebida"],
     "Transporte": ["gasolina", "uber", "99", "estacionamento", "ipva", "seguro", "carro", "manutenção", "onibus", "metrô", "passagem", "combustível", "pedagio", "taxi", "aplicativo", "app"],
     "Moradia": ["aluguel", "condomínio", "iptu", "luz", "água", "internet", "gás", "diarista", "faxina", "energia", "net", "claro", "vivo", "oi", "tim", "conserto", "reparo", "internet celular", "celular internet"],
@@ -63,9 +64,30 @@ def encontrar_categoria_por_palavra(palavras: list):
             if palavra in keywords: return categoria_pai
     return None
 
-# =======================
-# Função para formatar valores BR (Sem alteração)
-# =======================
+# ===================================================================
+# --- NOVAS FUNÇÕES DE DATA (CORREÇÃO DO FUSO HORÁRIO) ---
+# ===================================================================
+LOCAL_TIMEZONE = pytz.timezone('America/Sao_Paulo') # Fuso de Brasília/SP
+
+def formatar_data(data_utc):
+    """Converte um datetime UTC para uma string formatada em GMT-3."""
+    if data_utc is None:
+        return "Data N/A"
+    
+    try:
+        # Se o DB não retornar com fuso (None), assume que é UTC
+        if data_utc.tzinfo is None:
+            data_utc = pytz.utc.localize(data_utc)
+            
+        # Converte para o fuso-horário local
+        data_local = data_utc.astimezone(LOCAL_TIMEZONE)
+        
+        # Formata (DD/MM/AAAA HH:MM)
+        return data_local.strftime("%d/%m/%Y %H:%M")
+    except Exception as e:
+        print(f"Erro ao formatar data {data_utc}: {e}")
+        return str(data_utc) # Retorna a data crua em caso de erro
+
 def formatar_valor(valor):
     try: valor_decimal = Decimal(valor)
     except (decimal.InvalidOperation, TypeError, ValueError): valor_decimal = Decimal("0.00")
@@ -118,7 +140,7 @@ def interpretar_mensagem(texto: str):
 
 
 # ==========================================================
-# --- Teclado Flutuante (Com emojis atualizados) ---
+# --- Teclado Flutuante (Sem alteração) ---
 # ==========================================================
 def teclado_flutuante(user_id):
     entradas = db.get_soma(user_id, "entrada"); gastos = db.get_soma(user_id, "gasto"); saldo = entradas - gastos
@@ -148,7 +170,7 @@ def teclado_filtros_periodo():
     return ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
 
 # =======================
-# Funções de Gráficos, PDF, XLSX, etc. (Sem alterações)
+# Funções de Gráficos, PDF, XLSX, etc. (MODIFICADAS)
 # =======================
 def grafico_gastos_pizza(user_id=None, inicio=None, fim=None):
     rows = db.gastos_por_categoria(user_id=user_id, inicio=inicio, fim=fim)
@@ -176,12 +198,16 @@ def gerar_pdf(user_id=None, filename="relatorio.pdf", inicio=None, fim=None):
     story.append(Paragraph("💰 Entradas:", styles["Heading2"]))
     trans_e = db.get_todas(user_id=user_id, tipo="entrada", inicio=inicio, fim=fim)
     for t in trans_e:
-        try: story.append(Paragraph(f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}", styles["Normal"]))
+        try: 
+            # USA formatar_data(t[6])
+            story.append(Paragraph(f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}", styles["Normal"]))
         except (decimal.InvalidOperation, TypeError, ValueError): pass
     story.append(Spacer(1, 20)); story.append(Paragraph("💸 Saídas:", styles["Heading2"]))
     trans_s = db.get_todas(user_id=user_id, tipo="gasto", inicio=inicio, fim=fim)
     for t in trans_s:
-        try: story.append(Paragraph(f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}", styles["Normal"]))
+        try: 
+            # USA formatar_data(t[6])
+            story.append(Paragraph(f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}", styles["Normal"]))
         except (decimal.InvalidOperation, TypeError, ValueError): pass
     doc.build(story); return filename
 
@@ -191,7 +217,8 @@ def gerar_xlsx(user_id=None, filename="relatorio.xlsx", inicio=None, fim=None):
     for t in transacoes:
         try: valor_num = Decimal(t[2])
         except (decimal.InvalidOperation, TypeError, ValueError): valor_num = Decimal("0.00")
-        ws.append([t[1], valor_num, t[3], t[4], t[5] or "Dinheiro", t[6]])
+        # USA formatar_data(t[6])
+        ws.append([t[1], valor_num, t[3], t[4], t[5] or "Dinheiro", formatar_data(t[6])])
     entradas = db.get_soma(user_id, "entrada", inicio=inicio, fim=fim); gastos = db.get_soma(user_id, "gasto", inicio=inicio, fim=fim); saldo = entradas - gastos
     ws.append([]); ws.append(["Entradas", entradas]); ws.append(["Gastos", gastos]); ws.append(["Saldo", saldo])
     num_format = 'R$ #,##0.00'; max_row = ws.max_row
@@ -226,11 +253,13 @@ async def enviar_extrato_filtrado(update: Update, context: ContextTypes.DEFAULT_
     else:
         if entradas_filtradas:
             texto += "--- *Entradas* ---\n";
-            for t in entradas_filtradas: texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[6]}\n"
+            # USA formatar_data(t[6])
+            for t in entradas_filtradas: texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {formatar_data(t[6])}\n"
             texto += "\n"
         if saidas_filtradas:
             texto += "--- *Saídas* ---\n"
-            for t in saidas_filtradas: texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}\n"
+            # USA formatar_data(t[6])
+            for t in saidas_filtradas: texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}\n"
             texto += "\n"
         texto += "--- *Resumo do Período* ---\n"; texto += f"💰 Total Entradas: R$ {formatar_valor(total_entradas)}\n"; texto += f"💸 Total Gastos: R$ {formatar_valor(total_gastos)}\n"; texto += f"📌 Saldo Período: R$ {formatar_valor(saldo_periodo)}\n"
     await update.message.reply_text(texto, parse_mode='Markdown', reply_markup=teclado_flutuante(user_id))
@@ -252,11 +281,13 @@ async def enviar_extrato_por_categoria(update: Update, context: ContextTypes.DEF
         return
     if entradas_filtradas:
         texto += "--- *Entradas* ---\n"
-        for t in entradas_filtradas: texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[6]}\n"
+        # USA formatar_data(t[6])
+        for t in entradas_filtradas: texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {formatar_data(t[6])}\n"
         texto += "\n"
     if saidas_filtradas:
         texto += "--- *Saídas* ---\n"
-        for t in saidas_filtradas: texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}\n"
+        # USA formatar_data(t[6])
+        for t in saidas_filtradas: texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}\n"
         texto += "\n"
     texto += f"--- *Resumo da Categoria: {categoria_desejada.capitalize()}* ---\n"
     texto += f"💰 Total Entradas: R$ {formatar_valor(total_entradas)}\n"; texto += f"💸 Total Gastos: R$ {formatar_valor(total_gastos)}\n"; texto += f"📌 Saldo Categoria: R$ {formatar_valor(saldo_categoria)}\n"
@@ -296,7 +327,7 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if 'aguardando_filtro_categoria' in context.user_data: del context.user_data['aguardando_filtro_categoria']
         await update.message.reply_text("Ação cancelada.", reply_markup=teclado_flutuante(user_id)); return
 
-    # --- Bloco Admin (Corrigido para 'None') ---
+    # --- Bloco Admin (Corrigido para 'None' E DATA) ---
     if user_id == ADMIN_USER_ID and "admin_selecionado" in context.user_data:
         selecionado_id, selecionado_nome = context.user_data["admin_selecionado"]
         if 'aguardando_filtro' in context.user_data: del context.user_data['aguardando_filtro']
@@ -304,13 +335,15 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if msg == "💰 Entradas":
             transacoes = db.get_todas(user_id=selecionado_id, tipo="entrada")
             filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0] 
-            texto = f"💰 Entradas de {selecionado_nome}\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]);
+            # USA formatar_data(t[6])
+            texto = f"💰 Entradas de {selecionado_nome}\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]);
             if not filtradas: texto = f"{selecionado_nome} não tem entradas."; 
             await update.message.reply_text(texto, reply_markup=teclado_admin_usuario_selecionado())
         elif msg == "💸 Saídas":
             transacoes = db.get_todas(user_id=selecionado_id, tipo="gasto")
             filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0] 
-            texto = f"💸 Saídas de {selecionado_nome}\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]);
+            # USA formatar_data(t[6])
+            texto = f"💸 Saídas de {selecionado_nome}\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]);
             if not filtradas: texto = f"{selecionado_nome} não tem saídas."; 
             await update.message.reply_text(texto, reply_markup=teclado_admin_usuario_selecionado())
         elif msg == "🧾 Saldo Geral":
@@ -350,12 +383,14 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg == "📥 Ver Entradas": 
         transacoes = db.get_todas(user_id=user_id, tipo="entrada")
         filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0]
-        await update.message.reply_text("Nenhuma entrada.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💰 Entradas:\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[6]}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
+        # USA formatar_data(t[6])
+        await update.message.reply_text("Nenhuma entrada.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💰 Entradas:\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {formatar_data(t[6])}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
     
     if msg == "📤 Ver Saídas": 
         transacoes = db.get_todas(user_id=user_id, tipo="gasto")
         filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0]
-        await update.message.reply_text("Nenhuma saída.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💸 Saídas:\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
+        # USA formatar_data(t[6])
+        await update.message.reply_text("Nenhuma saída.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💸 Saídas:\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
 
     if msg == "🗓️ Filtrar por Período": 
         context.user_data['aguardando_filtro'] = True; await update.message.reply_text("Selecione o período:", reply_markup=teclado_filtros_periodo()); return
@@ -404,7 +439,7 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg == "🧑‍💼 Ver Usuários" and user_id == ADMIN_USER_ID: 
         # MODIFICAÇÃO IMPORTANTE AQUI:
         # Pega a lista de (ID, Nome) que o seu código espera
-        lista_id_nome = db.listar_usuarios_com_nome() # <--- CHAMA A NOVA FUNÇÃO
+        lista_id_nome = db.listar_usuarios_com_nome() # <--- CHAMA A FUNÇÃO CORRETA
         
         if not lista_id_nome: 
             await update.message.reply_text("Nenhum usuário.", reply_markup=teclado_flutuante(user_id)); return
@@ -464,7 +499,6 @@ async def send_broadcast(bot: Bot, message: str):
             print(f"Falha: Usuário {user_id} bloqueou o bot.")
         except ChatMigrated as e:
             print(f"Falha: Chat {user_id} migrou para {e.new_chat_id}")
-            # (Opcional: você poderia salvar o e.new_chat_id no DB aqui)
         except Exception as e:
             print(f"Falha: Erro desconhecido com user_id {user_id}: {e}")
     print("Broadcast concluído.")
@@ -475,12 +509,31 @@ async def send_broadcast(bot: Bot, message: str):
 # Esta é a função alvo da THREAD 2 (BOT)
 def run_telegram_bot_thread(app: Application):
     """Função alvo da Thread: cria um loop asyncio e roda a lógica principal."""
+    # Cria um novo loop de eventos para esta thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    
     print("🤖 Bot do Telegram iniciando polling em background...")
     try:
-        # Roda o polling (que gerencia seu próprio loop)
+        # 1. Verificar se é um novo deploy ANTES de iniciar o bot
+        current_commit = os.environ.get("RENDER_GIT_COMMIT")
+        last_commit_sent = db.get_config("last_commit_hash")
+        
+        print(f"Commit Atual (Render): {current_commit}")
+        print(f"Último Commit (Banco): {last_commit_sent}")
+
+        if current_commit and (current_commit != last_commit_sent):
+            print("Detectado novo deploy! Enviando broadcast...")
+            # Roda o broadcast DENTRO do loop de eventos desta thread
+            loop.run_until_complete(send_broadcast(app.bot, BROADCAST_MESSAGE))
+            db.set_config("last_commit_hash", current_commit)
+            print("Broadcast enviado e hash salvo.")
+        else:
+            print("Inicialização normal (sem broadcast).")
+
+        # 2. Inicia o polling (que gerencia seu próprio loop)
         app.run_polling(stop_signals=None) 
+        
     except Exception as e:
         print(f"!!! ERRO FATAL NO POLLING: {e} !!!")
 
@@ -516,28 +569,7 @@ if __name__ == "__main__":
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
         print("🤖 Bot configurado.")
 
-        # --- LÓGICA DE BROADCAST (Roda Sincronamente ANTES de iniciar) ---
-        try:
-            current_commit = os.environ.get("RENDER_GIT_COMMIT")
-            last_commit_sent = db.get_config("last_commit_hash")
-            
-            print(f"Commit Atual (Render): {current_commit}")
-            print(f"Último Commit (Banco): {last_commit_sent}")
-
-            if current_commit and (current_commit != last_commit_sent):
-                print("Detectado novo deploy! Enviando broadcast...")
-                temp_bot = Bot(token=TOKEN)
-                # Roda a função async 'send_broadcast' de forma síncrona
-                asyncio.run(send_broadcast(temp_bot, BROADCAST_MESSAGE)) 
-                db.set_config("last_commit_hash", current_commit)
-                print("Broadcast enviado e hash salvo.")
-            else:
-                print("Inicialização normal (sem broadcast).")
-        except Exception as e:
-            print(f"Erro durante a verificação de broadcast: {e}")
-        # --- Fim da lógica de broadcast ---
-
-        # 1. Inicia a lógica do bot (Polling) em uma thread separada
+        # 1. Inicia a lógica do bot (Async + Broadcast + Polling) em uma thread separada
         bot_thread = Thread(target=run_telegram_bot_thread, args=(app,), daemon=True)
         bot_thread.start()
         

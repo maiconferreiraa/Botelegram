@@ -213,8 +213,9 @@ class Database:
     # ========================================================
     # --- MODIFICAÇÃO AQUI ---
     # ========================================================
+    
     def listar_usuarios(self):
-        """Retorna uma LISTA DE IDs de usuários (ex: [123, 456])."""
+        """(CORRIGIDO) Retorna uma LISTA DE IDs de usuários (ex: [123, 456])."""
         conn, cursor = None, None
         results = []
         try:
@@ -226,13 +227,14 @@ class Database:
             # Converte a lista de tuplas [(123,), (456,)] em uma lista simples [123, 456]
             results = [row[0] for row in cursor.fetchall()]
         except Exception as e:
-            print(f"Erro em listar_usuarios: {e}")
+            print(f"Erro em listar_usuarios (só IDs): {e}")
         finally:
             self._close_connection(conn, cursor)
         return results # Retorna [123, 456, 789]
         
+    # --- NOVA FUNÇÃO ---
     def listar_usuarios_com_nome(self):
-        """Função separada para o Admin, retorna (ID, Nome)."""
+        """(NOVO) Função separada para o Admin, retorna (ID, Nome)."""
         conn, cursor = None, None
         results = []
         try:
@@ -244,7 +246,7 @@ class Database:
             print(f"Erro em listar_usuarios_com_nome: {e}")
         finally:
             self._close_connection(conn, cursor)
-        return results
+        return results # Retorna [(123, 'Maicon'), (456, 'Rute')]
 
     def gastos_por_categoria(self, user_id=None, inicio=None, fim=None):
         conn, cursor = None, None
