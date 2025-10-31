@@ -5,18 +5,18 @@ from datetime import datetime, timedelta
 
 class Database:
     def __init__(self):
-        # 1. Lê a URL de conexão do banco (configurada no Render)
         self.db_url = os.environ.get('DATABASE_URL')
         if not self.db_url:
             raise ValueError("Erro: A variável de ambiente DATABASE_URL não foi configurada.")
         
-        # 2. Cria as tabelas se elas não existirem
-        self.criar_tabelas()
+        # Cria todas as tabelas no início
+        self.criar_tabela_usuarios()
+        self.criar_tabela_transacoes()
+        self.criar_tabela_config() # <-- NOVA TABELA
 
     def _get_connection(self):
         """Helper para obter uma nova conexão (thread-safe)."""
         try:
-            # Conecta ao banco PostgreSQL usando a URL
             conn = psycopg2.connect(self.db_url)
             return conn, conn.cursor()
         except Exception as e:
@@ -27,24 +27,29 @@ class Database:
         """Helper para fechar conexões."""
         if cursor: cursor.close()
         if conn: conn.close()
-
-    def criar_tabelas(self):
-        """Cria as tabelas se elas não existirem (Sintaxe PostgreSQL)."""
+        
+    def criar_tabela_usuarios(self):
         conn, cursor = None, None
         try:
             conn, cursor = self._get_connection()
             if not cursor: return
-
-            # Tabela Usuarios (BIGINT para user_id do Telegram)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS usuarios (
                     user_id BIGINT PRIMARY KEY,
                     nome TEXT
                 )
             """)
-            
-            # Tabela Transacoes (SERIAL para ID automático, DECIMAL para dinheiro)
-            # Mudei 'data TEXT' para 'data TIMESTAMP' para melhor performance
+            conn.commit()
+        except Exception as e:
+            print(f"Erro ao criar tabela usuarios: {e}")
+        finally:
+            self._close_connection(conn, cursor)
+
+    def criar_tabela_transacoes(self):
+        conn, cursor = None, None
+        try:
+            conn, cursor = self._get_connection()
+            if not cursor: return
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS transacoes (
                     id SERIAL PRIMARY KEY,
@@ -61,27 +66,72 @@ class Database:
             """)
             conn.commit()
         except Exception as e:
-            print(f"Erro ao criar tabelas: {e}")
-            if conn: conn.rollback()
+            print(f"Erro ao criar tabela transacoes: {e}")
+        finally:
+            self._close_connection(conn, cursor)
+            
+    # --- NOVO: Tabela de Configuração ---
+    def criar_tabela_config(self):
+        conn, cursor = None, None
+        try:
+            conn, cursor = self._get_connection()
+            if not cursor: return
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS app_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
+            conn.commit()
+        except Exception as e:
+            print(f"Erro ao criar tabela app_config: {e}")
         finally:
             self._close_connection(conn, cursor)
 
-    # A lógica de migração (migrar_colunas_antigas) foi removida,
-    # pois estamos começando um banco de dados novo e limpo.
+    # --- NOVO: Pegar valor de configuração ---
+    def get_config(self, key):
+        conn, cursor = None, None
+        result = None
+        try:
+            conn, cursor = self._get_connection()
+            if not cursor: return None
+            cursor.execute("SELECT value FROM app_config WHERE key = %s", (key,))
+            row = cursor.fetchone()
+            if row:
+                result = row[0]
+        except Exception as e:
+            print(f"Erro em get_config: {e}")
+        finally:
+            self._close_connection(conn, cursor)
+        return result
+
+    # --- NOVO: Definir valor de configuração ---
+    def set_config(self, key, value):
+        conn, cursor = None, None
+        try:
+            conn, cursor = self._get_connection()
+            if not cursor: return
+            cursor.execute("""
+                INSERT INTO app_config (key, value) VALUES (%s, %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """, (key, value))
+            conn.commit()
+        except Exception as e:
+            print(f"Erro em set_config: {e}")
+        finally:
+            self._close_connection(conn, cursor)
+    
+    # --- Restante das suas funções (sem alteração, apenas convertidas para PostgreSQL) ---
 
     def add_transacao(self, user_id, tipo, valor_num, valor_txt, categoria, metodo="dinheiro", cartao=None, nome=""):
         conn, cursor = None, None
         try:
             conn, cursor = self._get_connection()
             if not cursor: return
-            
-            # 1. Garante usuário (Sintaxe PostgreSQL: %s e EXCLUDED.nome)
             cursor.execute("""
                 INSERT INTO usuarios (user_id, nome) VALUES (%s, %s)
                 ON CONFLICT(user_id) DO UPDATE SET nome = EXCLUDED.nome
             """, (user_id, nome))
-            
-            # 2. Insere transação (Sintaxe %s e 'data' como objeto datetime)
             cursor.execute("""
                 INSERT INTO transacoes (user_id, tipo, valor_num, valor_txt, categoria, metodo, cartao, data)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -99,8 +149,6 @@ class Database:
         try:
             conn, cursor = self._get_connection()
             if not cursor: return Decimal(0)
-            
-            # Sintaxe PostgreSQL: %s e data::date para comparar datas
             query = "SELECT SUM(valor_num) FROM transacoes WHERE tipo=%s AND user_id=%s"
             params = [tipo, user_id]
             if inicio:
@@ -109,7 +157,6 @@ class Database:
             if fim:
                 query += " AND data::date <= %s::date"
                 params.append(fim.strftime("%Y-%m-%d"))
-                
             cursor.execute(query, params)
             result = cursor.fetchone()[0]
         except Exception as e:
@@ -124,22 +171,12 @@ class Database:
         try:
             conn, cursor = self._get_connection()
             if not cursor: return []
-            
             query = "SELECT id, tipo, valor_num, categoria, metodo, cartao, data FROM transacoes WHERE 1=1"
             params = []
-            if tipo:
-                query += " AND tipo=%s"
-                params.append(tipo)
-            if user_id:
-                query += " AND user_id=%s"
-                params.append(user_id)
-            if inicio:
-                query += " AND data::date >= %s::date"
-                params.append(inicio.strftime("%Y-%m-%d"))
-            if fim:
-                query += " AND data::date <= %s::date"
-                params.append(fim.strftime("%Y-%m-%d"))
-            
+            if tipo: query += " AND tipo=%s"; params.append(tipo)
+            if user_id: query += " AND user_id=%s"; params.append(user_id)
+            if inicio: query += " AND data::date >= %s::date"; params.append(inicio.strftime("%Y-%m-%d"))
+            if fim: query += " AND data::date <= %s::date"; params.append(fim.strftime("%Y-%m-%d"))
             query += " ORDER BY id DESC" 
             cursor.execute(query, params)
             results = cursor.fetchall()
@@ -154,7 +191,6 @@ class Database:
         try:
             conn, cursor = self._get_connection()
             if not cursor: return
-            
             now = datetime.now()
             if opcao == "ultimo":
                 transacoes = self.get_todas(user_id=user_id) 
@@ -185,7 +221,6 @@ class Database:
         try:
             conn, cursor = self._get_connection()
             if not cursor: return []
-            
             cursor.execute("SELECT user_id, nome FROM usuarios ORDER BY nome ASC")
             results = [(row[0], row[1] or f"Usuário {row[0]}") for row in cursor.fetchall()]
         except Exception as e:
@@ -200,18 +235,11 @@ class Database:
         try:
             conn, cursor = self._get_connection()
             if not cursor: return []
-            
             query = "SELECT categoria, SUM(valor_num) FROM transacoes WHERE tipo='gasto'"
             params = []
-            if user_id is not None:
-                query += " AND user_id=%s"
-                params.append(user_id)
-            if inicio:
-                query += " AND data::date >= %s::date"
-                params.append(inicio.strftime("%Y-%m-%d"))
-            if fim:
-                query += " AND data::date <= %s::date"
-                params.append(fim.strftime("%Y-%m-%d"))
+            if user_id is not None: query += " AND user_id=%s"; params.append(user_id)
+            if inicio: query += " AND data::date >= %s::date"; params.append(inicio.strftime("%Y-%m-%d"))
+            if fim: query += " AND data::date <= %s::date"; params.append(fim.strftime("%Y-%m-%d"))
             query += " GROUP BY categoria HAVING SUM(valor_num) > 0"
             cursor.execute(query, params)
             results = cursor.fetchall()
@@ -222,8 +250,6 @@ class Database:
         return results
 
     def series_mensais(self, user_id=None, meses=6):
-        # Esta função não usa SQL diretamente, apenas chama get_soma,
-        # que já foi corrigido. Nenhuma mudança é necessária aqui.
         hoje = datetime.now(); labels = []; entradas_vals = []; gastos_vals = []
         for i in reversed(range(meses)):
             mes_alvo = hoje.month - i; ano_alvo = hoje.year
@@ -245,12 +271,9 @@ class Database:
         try:
             conn, cursor = self._get_connection()
             if not cursor: return []
-            
             query = "SELECT cartao, SUM(valor_num) FROM transacoes WHERE tipo='gasto' AND cartao IS NOT NULL"
             params = []
-            if user_id is not None:
-                query += " AND user_id=%s"
-                params.append(user_id)
+            if user_id is not None: query += " AND user_id=%s"; params.append(user_id)
             query += " GROUP BY cartao HAVING SUM(valor_num) > 0"
             cursor.execute(query, params)
             results = cursor.fetchall()

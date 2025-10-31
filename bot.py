@@ -8,8 +8,9 @@ from datetime import datetime, timedelta
 import asyncio
 
 # Imports do Bot
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, Bot # <-- Import 'Bot'
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
+from telegram.error import Forbidden, ChatMigrated # <-- Imports para erros de broadcast
 
 # Imports dos Gráficos/Relatórios
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
@@ -24,7 +25,7 @@ from flask import Flask
 from threading import Thread
 # ----------------------------------------
 
-from db import db # importa a instância do db.py
+from db import db # importa a instância do db.py (AGORA O db.py DO POSTGRESQL)
 
 # =======================
 # CONFIGURAÇÃO ADMIN
@@ -32,10 +33,9 @@ from db import db # importa a instância do db.py
 ADMIN_USER_ID = 853716041 # ID @maiconjbf
 
 # ===================================================================
-# --- MAPEAMENTO DE CATEGORIAS (Como definido anteriormente) ---
+# --- MAPEAMENTO DE CATEGORIAS (Sem alteração) ---
 # ===================================================================
 MAPEAMENTO_CATEGORIAS = {
-    # --- GASTOS ---
     "Alimentação": ["supermercado", "mercado", "lanche", "churrasco", "restaurante", "ifood", "rappi", "padaria", "açougue", "hortifruti", "pizza", "comida", "jantar", "almoço", "café", "bebida"],
     "Transporte": ["gasolina", "uber", "99", "estacionamento", "ipva", "seguro", "carro", "manutenção", "onibus", "metrô", "passagem", "combustível", "pedagio", "taxi", "aplicativo", "app"],
     "Moradia": ["aluguel", "condomínio", "iptu", "luz", "água", "internet", "gás", "diarista", "faxina", "energia", "net", "claro", "vivo", "oi", "tim", "conserto", "reparo", "internet celular", "celular internet"],
@@ -47,7 +47,6 @@ MAPEAMENTO_CATEGORIAS = {
     "Vestuário/Cuidados": ["roupa", "sapato", "tênis", "acessório", "vestido", "calça", "beleza", "cabelereiro", "cosmético", "perfume", "barbeiro"],
     "Dívidas/Contas": ["fatura", "empréstimo", "juros", "boleto", "imposto", "taxa", "ir", "multa", "cartorio"],
     "Pets": ["pet", "ração", "veterinário", "petshop", "cachorro", "gato"],
-    # --- ENTRADAS ---
     "Salário": ["salário", "salario", "pagamento", "holerite"],
     "Vendas": ["venda", "cliente", "recebimento", "comissao", "serviço", "cliente pagou"],
     "Investimentos": ["investimento", "ação", "ações", "b3", "fundo", "tesouro", "cdb", "cripto", "resgate", "dividendo", "jcp"],
@@ -55,7 +54,7 @@ MAPEAMENTO_CATEGORIAS = {
 }
 
 # =======================
-# --- FUNÇÃO HELPER (Como definido anteriormente) ---
+# --- FUNÇÃO HELPER (Sem alteração) ---
 # =======================
 def encontrar_categoria_por_palavra(palavras: list):
     for palavra in palavras:
@@ -64,7 +63,7 @@ def encontrar_categoria_por_palavra(palavras: list):
     return None
 
 # =======================
-# Função para formatar valores BR
+# Função para formatar valores BR (Sem alteração)
 # =======================
 def formatar_valor(valor):
     try: valor_decimal = Decimal(valor)
@@ -72,7 +71,7 @@ def formatar_valor(valor):
     return f"{valor_decimal:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 # =======================
-# Interpretação de mensagens (MODIFICADA)
+# Interpretação de mensagens (Sem alteração)
 # =======================
 def interpretar_mensagem(texto: str):
     texto = texto.lower().strip()
@@ -83,11 +82,7 @@ def interpretar_mensagem(texto: str):
         try: valor_num = Decimal(valor_txt.replace(".", "").replace(",", "."))
         except decimal.InvalidOperation: return {"acao": "desconhecido"}
         if valor_num <= 0: return {"acao": "desconhecido"}
-
-        palavras = texto.split()
-        palavras_texto = [p for p in palavras if valor_txt not in p]
-
-        # --- Lógica de Cartão ---
+        palavras = texto.split(); palavras_texto = [p for p in palavras if valor_txt not in p]
         cartao = None; metodo = "dinheiro"; cartoes_lista = ["nubank", "santander", "inter", "caixa"]; stop_words_cartao = cartoes_lista + ["cartão", "cartao"]
         for c in cartoes_lista:
             if c in palavras_texto: cartao = c.capitalize(); metodo = "cartao"; break
@@ -103,21 +98,15 @@ def interpretar_mensagem(texto: str):
                     else: break
                 if nome_cartao_palavras: cartao = " ".join(nome_cartao_palavras).capitalize()
                 else: cartao = "Cartão"
-        # --- Fim Cartão ---
-
-        # --- Determina Tipo e Categoria ---
         entradas_keywords = [kw for cat, kws in MAPEAMENTO_CATEGORIAS.items() if cat in ["Salário", "Vendas", "Outras Entradas", "Investimentos"] for kw in kws]
         is_entrada = any(p in entradas_keywords for p in palavras_texto)
-
         if is_entrada:
             categoria_mapeada = encontrar_categoria_por_palavra(palavras_texto)
             categoria_final = categoria_mapeada if categoria_mapeada else "Entrada"
             return {"acao": "add", "tipo": "entrada", "valor_num": valor_num, "valor_txt": valor_txt, "categoria": categoria_final.capitalize(), "metodo": metodo, "cartao": cartao}
         else:
-            categoria_mapeada = encontrar_categoria_por_palavra(palavras_texto)
-            categoria_final = None
-            if categoria_mapeada:
-                categoria_final = categoria_mapeada
+            categoria_mapeada = encontrar_categoria_por_palavra(palavras_texto); categoria_final = None
+            if categoria_mapeada: categoria_final = categoria_mapeada
             else:
                 stop_words_fallback = stop_words_cartao
                 if cartao: stop_words_fallback.extend(cartao.lower().split())
@@ -135,7 +124,6 @@ def teclado_flutuante(user_id):
     status = "🟢😀 Finanças Saudáveis"
     if saldo < 0: status = "🔴😟 Saldo Negativo"
     elif entradas > 0 and (gastos / entradas) > Decimal("0.7"): status = "🟠🤔 Gastos altos!"
-    
     teclado = [
         [status],
         ["⚖️ Saldo Geral", "💳 Gastos por Cartão"],
@@ -145,8 +133,7 @@ def teclado_flutuante(user_id):
         ["📄 Gerar PDF", "📈 Gerar XLSX", "🗑️ Resetar Valores"],
         ["🤖 Quero um robô"]
     ]
-    if user_id == ADMIN_USER_ID: 
-        teclado.append(["🧑‍💼 Ver Usuários"])
+    if user_id == ADMIN_USER_ID: teclado.append(["🧑‍💼 Ver Usuários"])
     return ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=False)
 
 def teclado_admin_usuario_selecionado():
@@ -186,14 +173,12 @@ def gerar_pdf(user_id=None, filename="relatorio.pdf", inicio=None, fim=None):
     story.append(Paragraph("💰 Entradas:", styles["Heading2"]))
     trans_e = db.get_todas(user_id=user_id, tipo="entrada", inicio=inicio, fim=fim)
     for t in trans_e:
-        try:
-            story.append(Paragraph(f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}", styles["Normal"]))
+        try: story.append(Paragraph(f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}", styles["Normal"]))
         except (decimal.InvalidOperation, TypeError, ValueError): pass
     story.append(Spacer(1, 20)); story.append(Paragraph("💸 Saídas:", styles["Heading2"]))
     trans_s = db.get_todas(user_id=user_id, tipo="gasto", inicio=inicio, fim=fim)
     for t in trans_s:
-        try:
-            story.append(Paragraph(f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}", styles["Normal"]))
+        try: story.append(Paragraph(f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}", styles["Normal"]))
         except (decimal.InvalidOperation, TypeError, ValueError): pass
     doc.build(story); return filename
 
@@ -284,9 +269,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      "Use o teclado para outras opções:",
                                      reply_markup=teclado_flutuante(user_id))
 
-# ==========================================================
-# --- Função Responder (Com a lógica de filtro MODIFICADA) ---
-# ==========================================================
 async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id; user_name = update.message.from_user.first_name
     msg = update.message.text
@@ -311,35 +293,29 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if 'aguardando_filtro_categoria' in context.user_data: del context.user_data['aguardando_filtro_categoria']
         await update.message.reply_text("Ação cancelada.", reply_markup=teclado_flutuante(user_id)); return
 
-    # ==========================================================
-    # --- MODIFICAÇÃO FINAL: Correção no Bloco Admin ---
-    # ==========================================================
+    # --- Bloco Admin (Corrigido para 'None') ---
     if user_id == ADMIN_USER_ID and "admin_selecionado" in context.user_data:
         selecionado_id, selecionado_nome = context.user_data["admin_selecionado"]
         if 'aguardando_filtro' in context.user_data: del context.user_data['aguardando_filtro']
         
         if msg == "💰 Entradas":
             transacoes = db.get_todas(user_id=selecionado_id, tipo="entrada")
-            # --- CORREÇÃO AQUI: Adicionado 't[2] is not None' ---
             filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0] 
             texto = f"💰 Entradas de {selecionado_nome}\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]);
             if not filtradas: texto = f"{selecionado_nome} não tem entradas."; 
             await update.message.reply_text(texto, reply_markup=teclado_admin_usuario_selecionado())
-
         elif msg == "💸 Saídas":
             transacoes = db.get_todas(user_id=selecionado_id, tipo="gasto")
-            # --- CORREÇÃO AQUI: Adicionado 't[2] is not None' ---
             filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0] 
             texto = f"💸 Saídas de {selecionado_nome}\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {t[6]}" for t in filtradas]);
             if not filtradas: texto = f"{selecionado_nome} não tem saídas."; 
             await update.message.reply_text(texto, reply_markup=teclado_admin_usuario_selecionado())
-
         elif msg == "🧾 Saldo Geral":
             entradas = db.get_soma(selecionado_id, "entrada"); gastos = db.get_soma(selecionado_id, "gasto"); saldo = entradas - gastos
             await update.message.reply_text(f"Saldo de {selecionado_nome}\n💰 Entradas: R$ {formatar_valor(entradas)}\n💸 Gastos: R$ {formatar_valor(gastos)}\n📌 Saldo: R$ {formatar_valor(saldo)}", reply_markup=teclado_admin_usuario_selecionado())
         elif msg == "📑 Gerar PDF": 
             filename = gerar_pdf(selecionado_id, f"rel_{selecionado_id}.pdf"); await update.message.reply_document(open(filename, "rb"), caption=f"PDF de {selecionado_nome}", reply_markup=teclado_admin_usuario_selecionado()); os.remove(filename)
-        elif msg == "📊 Gerar XLSX": 
+        elif msg == "📊 Gerar XLSX": # <-- MUDANÇA DE EMOJI AQUI NO CÓDIGO DO ADMIN (ERA 📑)
             filename = gerar_xlsx(selecionado_id, f"rel_{selecionado_id}.xlsx"); await update.message.reply_document(open(filename, "rb"), caption=f"XLSX de {selecionado_nome}", reply_markup=teclado_admin_usuario_selecionado()); os.remove(filename)
         else: 
             await update.message.reply_text("Inválido.", reply_markup=teclado_admin_usuario_selecionado())
