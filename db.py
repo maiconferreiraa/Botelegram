@@ -15,6 +15,7 @@ class Database:
         self.criar_tabela_config()
 
     def _get_connection(self):
+        """Helper para obter uma nova conexão (thread-safe)."""
         try:
             conn = psycopg2.connect(self.db_url)
             return conn, conn.cursor()
@@ -23,6 +24,7 @@ class Database:
             return None, None
 
     def _close_connection(self, conn, cursor):
+        """Helper para fechar conexões."""
         if cursor: cursor.close()
         if conn: conn.close()
         
@@ -116,7 +118,7 @@ class Database:
         finally:
             self._close_connection(conn, cursor)
     
-    # --- Restante das suas funções (sem alteração, apenas convertidas para PostgreSQL) ---
+    # --- Funções do Bot (Convertidas para PostgreSQL) ---
 
     def add_transacao(self, user_id, tipo, valor_num, valor_txt, categoria, metodo="dinheiro", cartao=None, nome=""):
         conn, cursor = None, None
@@ -211,7 +213,7 @@ class Database:
             self._close_connection(conn, cursor)
 
     # ========================================================
-    # --- MODIFICAÇÃO AQUI ---
+    # --- MODIFICAÇÃO AQUI (Bug do Broadcast/Admin corrigido) ---
     # ========================================================
     
     def listar_usuarios(self):

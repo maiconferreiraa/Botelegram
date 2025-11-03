@@ -6,8 +6,6 @@ import decimal
 from decimal import Decimal
 from datetime import datetime, timedelta
 import asyncio
-from threading import Thread
-from flask import Flask
 import pytz # Importa biblioteca de fuso horário
 
 # Imports do Bot
@@ -23,7 +21,12 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# --- Imports de Flask e Thread REMOVIDOS ---
+# ==================================
+# --- MODIFICAÇÃO: IMPORT FALTANDO ---
+# ==================================
+from flask import Flask
+from threading import Thread
+# ----------------------------------------
 
 from db import db # importa a instância do db.py (PostgreSQL)
 
@@ -156,7 +159,7 @@ def teclado_filtros_periodo():
     return ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
 
 # =======================
-# Funções de Gráficos, PDF, XLSX, etc. (Sem alteração)
+# Funções de Gráficos, PDF, XLSX, etc. (Sem alterações)
 # =======================
 def grafico_gastos_pizza(user_id=None, inicio=None, fim=None):
     rows = db.gastos_por_categoria(user_id=user_id, inicio=inicio, fim=fim)
@@ -482,40 +485,38 @@ async def send_broadcast(bot: Bot, message: str):
 # --- NOVA LÓGICA DE INICIALIZAÇÃO (main) ---
 # ========================================================
 # Esta é a função alvo da THREAD 2 (BOT)
-async def main_async_logic(app: Application):
-    """Lógica async: checa broadcast e inicia polling."""
-    
-    # 1. Checar broadcast
-    current_commit = os.environ.get("RENDER_GIT_COMMIT")
-    last_commit_sent = db.get_config("last_commit_hash")
-    
-    print(f"Commit Atual (Render): {current_commit}")
-    print(f"Último Commit (Banco): {last_commit_sent}")
-
-    if current_commit and (current_commit != last_commit_sent):
-        print("Detectado novo deploy! Enviando broadcast...")
-        await send_broadcast(app.bot, BROADCAST_MESSAGE)
-        db.set_config("last_commit_hash", current_commit)
-        print("Broadcast enviado e hash salvo.")
-    else:
-        print("Inicialização normal (sem broadcast).")
-
-    # 2. Iniciar polling (com o argumento correto para threads)
-    print("Iniciando Polling do bot...")
-    # Esta é a função correta que aceita 'stop_signals'
-    await app.run_polling(stop_signals=None)
-
-
 def run_telegram_bot_thread(app: Application):
     """Função alvo da Thread: cria um loop asyncio e roda a lógica principal."""
+    # Cria um novo loop de eventos para esta thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    
     print("🤖 Bot do Telegram iniciando em background...")
     try:
-        loop.run_until_complete(main_async_logic(app))
+        # 1. Verificar se é um novo deploy ANTES de iniciar o bot
+        current_commit = os.environ.get("RENDER_GIT_COMMIT")
+        last_commit_sent = db.get_config("last_commit_hash")
+        
+        print(f"Commit Atual (Render): {current_commit}")
+        print(f"Último Commit (Banco): {last_commit_sent}")
+
+        if current_commit and (current_commit != last_commit_sent):
+            print("Detectado novo deploy! Enviando broadcast...")
+            # Roda o broadcast DENTRO do loop de eventos desta thread
+            loop.run_until_complete(send_broadcast(app.bot, BROADCAST_MESSAGE))
+            db.set_config("last_commit_hash", current_commit)
+            print("Broadcast enviado e hash salvo.")
+        else:
+            print("Inicialização normal (sem broadcast).")
+
+        # 2. Inicia o polling (que gerencia seu próprio loop)
+        # O app.run_polling() é uma função síncrona que bloqueia
+        # a thread_bot, que é exatamente o que queremos.
+        print("Iniciando Polling do bot...")
+        app.run_polling(stop_signals=None) 
+        
     except Exception as e:
         print(f"!!! ERRO FATAL NO POLLING: {e} !!!")
-        # (O RuntimeError de 'event loop already running' não deve acontecer aqui)
 
 # Esta é a função alvo da THREAD 1 (WEB)
 def run_flask(app_flask):
