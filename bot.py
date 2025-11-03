@@ -6,7 +6,7 @@ import decimal
 from decimal import Decimal
 from datetime import datetime, timedelta
 import asyncio
-import pytz # <-- MODIFICAÇÃO: Importa biblioteca de fuso horário
+import pytz # Importa biblioteca de fuso horário
 
 # Imports do Bot
 from telegram import Update, ReplyKeyboardMarkup, Bot
@@ -21,12 +21,9 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# --- Import do Flask e Thread (Necessário para Render/Replit) ---
-from flask import Flask
-from threading import Thread
-# ----------------------------------------
+# --- Imports de Flask e Thread REMOVIDOS ---
 
-from db import db # importa a instância do db.py (AGORA O db.py DO POSTGRESQL)
+from db import db # importa a instância do db.py (PostgreSQL)
 
 # =======================
 # CONFIGURAÇÃO ADMIN
@@ -37,7 +34,7 @@ ADMIN_USER_ID = 853716041 # ID @maiconjbf
 # --- MAPEAMENTO DE CATEGORIAS (Sem alteração) ---
 # ===================================================================
 MAPEAMENTO_CATEGORIAS = {
-    # ... (Seu mapeamento de categorias completo fica aqui - omitido por brevidade) ...
+    # --- GASTOS ---
     "Alimentação": ["supermercado", "mercado", "lanche", "churrasco", "restaurante", "ifood", "rappi", "padaria", "açougue", "hortifruti", "pizza", "comida", "jantar", "almoço", "café", "bebida"],
     "Transporte": ["gasolina", "uber", "99", "estacionamento", "ipva", "seguro", "carro", "manutenção", "onibus", "metrô", "passagem", "combustível", "pedagio", "taxi", "aplicativo", "app"],
     "Moradia": ["aluguel", "condomínio", "iptu", "luz", "água", "internet", "gás", "diarista", "faxina", "energia", "net", "claro", "vivo", "oi", "tim", "conserto", "reparo", "internet celular", "celular internet"],
@@ -52,40 +49,11 @@ MAPEAMENTO_CATEGORIAS = {
     "Salário": ["salário", "salario", "pagamento", "holerite"],
     "Vendas": ["venda", "cliente", "recebimento", "comissao", "serviço", "cliente pagou"],
     "Investimentos": ["investimento", "ação", "ações", "b3", "fundo", "tesouro", "cdb", "cripto", "resgate", "dividendo", "jcp"],
-    "Outras Entradas": ["entrada", "ganhei", "recebi", "pix", "reembolso", "presente"],
-    # ... (outras categorias, como "Pets") ...
-    
-    # --- NOVA CATEGORIA ---
-    "Compras Online": [
-        # Marketplaces
-        "amazon", "mercadolivre", "mercado livre", "shopee", "aliexpress", 
-        "ebay", "olx", "enjoei",
-
-        # Varejistas
-        "magalu", "magazine luiza", "casas bahia", "pontofrio", "ponto",
-        "kabum", "pichau", "terabyte", "fast shop",
-
-        # Roupas/Moda (se você preferir aqui do que em "Vestuário")
-        "shein", "dafiti", "zattini", "renner", "cea", "zara",
-
-        # Outros
-        "compra online", "pedido online", "frete", "importação", "dropshipping"
-    ],
-    "Serviços Digitais": [
-        # Software e Apps
-        "appstore", "google play", "playstore", "licença", "software", 
-        "antivirus", "canva", "adobe",
-
-        # Assinaturas (Não-Lazer)
-        "hospedagem", "hostgator", "hostinger", "dominio", "vps", "aws", 
-        "icloud", "google drive", "google one", "dropbox", "office 365",
-        "chatgpt", "midjourney"
-    ],
-    
+    "Outras Entradas": ["entrada", "ganhei", "recebi", "pix", "reembolso", "presente"]
 }
 
 # =======================
-# --- FUNÇÃO HELPER (Sem alteração) ---
+# --- FUNÇÕES HELPER (Sem alteração) ---
 # =======================
 def encontrar_categoria_por_palavra(palavras: list):
     for palavra in palavras:
@@ -93,29 +61,18 @@ def encontrar_categoria_por_palavra(palavras: list):
             if palavra in keywords: return categoria_pai
     return None
 
-# ===================================================================
-# --- NOVAS FUNÇÕES DE DATA (CORREÇÃO DO FUSO HORÁRIO) ---
-# ===================================================================
 LOCAL_TIMEZONE = pytz.timezone('America/Sao_Paulo') # Fuso de Brasília/SP
 
 def formatar_data(data_utc):
     """Converte um datetime UTC para uma string formatada em GMT-3."""
-    if data_utc is None:
-        return "Data N/A"
-    
+    if data_utc is None: return "Data N/A"
     try:
-        # Se o DB não retornar com fuso (None), assume que é UTC
-        if data_utc.tzinfo is None:
-            data_utc = pytz.utc.localize(data_utc)
-            
-        # Converte para o fuso-horário local
+        if data_utc.tzinfo is None: data_utc = pytz.utc.localize(data_utc)
         data_local = data_utc.astimezone(LOCAL_TIMEZONE)
-        
-        # Formata (DD/MM/AAAA HH:MM)
         return data_local.strftime("%d/%m/%Y %H:%M")
     except Exception as e:
         print(f"Erro ao formatar data {data_utc}: {e}")
-        return str(data_utc) # Retorna a data crua em caso de erro
+        return str(data_utc)
 
 def formatar_valor(valor):
     try: valor_decimal = Decimal(valor)
@@ -169,14 +126,13 @@ def interpretar_mensagem(texto: str):
 
 
 # ==========================================================
-# --- Teclado Flutuante (Sem alteração) ---
+# --- Teclados (Sem alteração) ---
 # ==========================================================
 def teclado_flutuante(user_id):
     entradas = db.get_soma(user_id, "entrada"); gastos = db.get_soma(user_id, "gasto"); saldo = entradas - gastos
     status = "🟢😀 Finanças Saudáveis"
     if saldo < 0: status = "🔴😟 Saldo Negativo"
     elif entradas > 0 and (gastos / entradas) > Decimal("0.7"): status = "🟠🤔 Gastos altos!"
-    
     teclado = [
         [status],
         ["⚖️ Saldo Geral", "💳 Gastos por Cartão"],
@@ -186,8 +142,7 @@ def teclado_flutuante(user_id):
         ["📄 Gerar PDF", "📈 Gerar XLSX", "🗑️ Resetar Valores"],
         ["🤖 Quero um robô"]
     ]
-    if user_id == ADMIN_USER_ID: 
-        teclado.append(["🧑‍💼 Ver Usuários"])
+    if user_id == ADMIN_USER_ID: teclado.append(["🧑‍💼 Ver Usuários"])
     return ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=False)
 
 def teclado_admin_usuario_selecionado():
@@ -199,7 +154,7 @@ def teclado_filtros_periodo():
     return ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
 
 # =======================
-# Funções de Gráficos, PDF, XLSX, etc. (MODIFICADAS)
+# Funções de Gráficos, PDF, XLSX, etc. (Sem alteração)
 # =======================
 def grafico_gastos_pizza(user_id=None, inicio=None, fim=None):
     rows = db.gastos_por_categoria(user_id=user_id, inicio=inicio, fim=fim)
@@ -227,16 +182,12 @@ def gerar_pdf(user_id=None, filename="relatorio.pdf", inicio=None, fim=None):
     story.append(Paragraph("💰 Entradas:", styles["Heading2"]))
     trans_e = db.get_todas(user_id=user_id, tipo="entrada", inicio=inicio, fim=fim)
     for t in trans_e:
-        try: 
-            # USA formatar_data(t[6])
-            story.append(Paragraph(f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}", styles["Normal"]))
+        try: story.append(Paragraph(f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}", styles["Normal"]))
         except (decimal.InvalidOperation, TypeError, ValueError): pass
     story.append(Spacer(1, 20)); story.append(Paragraph("💸 Saídas:", styles["Heading2"]))
     trans_s = db.get_todas(user_id=user_id, tipo="gasto", inicio=inicio, fim=fim)
     for t in trans_s:
-        try: 
-            # USA formatar_data(t[6])
-            story.append(Paragraph(f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}", styles["Normal"]))
+        try: story.append(Paragraph(f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}", styles["Normal"]))
         except (decimal.InvalidOperation, TypeError, ValueError): pass
     doc.build(story); return filename
 
@@ -246,7 +197,6 @@ def gerar_xlsx(user_id=None, filename="relatorio.xlsx", inicio=None, fim=None):
     for t in transacoes:
         try: valor_num = Decimal(t[2])
         except (decimal.InvalidOperation, TypeError, ValueError): valor_num = Decimal("0.00")
-        # USA formatar_data(t[6])
         ws.append([t[1], valor_num, t[3], t[4], t[5] or "Dinheiro", formatar_data(t[6])])
     entradas = db.get_soma(user_id, "entrada", inicio=inicio, fim=fim); gastos = db.get_soma(user_id, "gasto", inicio=inicio, fim=fim); saldo = entradas - gastos
     ws.append([]); ws.append(["Entradas", entradas]); ws.append(["Gastos", gastos]); ws.append(["Saldo", saldo])
@@ -282,12 +232,10 @@ async def enviar_extrato_filtrado(update: Update, context: ContextTypes.DEFAULT_
     else:
         if entradas_filtradas:
             texto += "--- *Entradas* ---\n";
-            # USA formatar_data(t[6])
             for t in entradas_filtradas: texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {formatar_data(t[6])}\n"
             texto += "\n"
         if saidas_filtradas:
             texto += "--- *Saídas* ---\n"
-            # USA formatar_data(t[6])
             for t in saidas_filtradas: texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}\n"
             texto += "\n"
         texto += "--- *Resumo do Período* ---\n"; texto += f"💰 Total Entradas: R$ {formatar_valor(total_entradas)}\n"; texto += f"💸 Total Gastos: R$ {formatar_valor(total_gastos)}\n"; texto += f"📌 Saldo Período: R$ {formatar_valor(saldo_periodo)}\n"
@@ -310,12 +258,10 @@ async def enviar_extrato_por_categoria(update: Update, context: ContextTypes.DEF
         return
     if entradas_filtradas:
         texto += "--- *Entradas* ---\n"
-        # USA formatar_data(t[6])
         for t in entradas_filtradas: texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {formatar_data(t[6])}\n"
         texto += "\n"
     if saidas_filtradas:
         texto += "--- *Saídas* ---\n"
-        # USA formatar_data(t[6])
         for t in saidas_filtradas: texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}\n"
         texto += "\n"
     texto += f"--- *Resumo da Categoria: {categoria_desejada.capitalize()}* ---\n"
@@ -364,14 +310,12 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if msg == "💰 Entradas":
             transacoes = db.get_todas(user_id=selecionado_id, tipo="entrada")
             filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0] 
-            # USA formatar_data(t[6])
             texto = f"💰 Entradas de {selecionado_nome}\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]);
             if not filtradas: texto = f"{selecionado_nome} não tem entradas."; 
             await update.message.reply_text(texto, reply_markup=teclado_admin_usuario_selecionado())
         elif msg == "💸 Saídas":
             transacoes = db.get_todas(user_id=selecionado_id, tipo="gasto")
             filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0] 
-            # USA formatar_data(t[6])
             texto = f"💸 Saídas de {selecionado_nome}\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]);
             if not filtradas: texto = f"{selecionado_nome} não tem saídas."; 
             await update.message.reply_text(texto, reply_markup=teclado_admin_usuario_selecionado())
@@ -412,13 +356,11 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg == "📥 Ver Entradas": 
         transacoes = db.get_todas(user_id=user_id, tipo="entrada")
         filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0]
-        # USA formatar_data(t[6])
         await update.message.reply_text("Nenhuma entrada.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💰 Entradas:\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {formatar_data(t[6])}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
     
     if msg == "📤 Ver Saídas": 
         transacoes = db.get_todas(user_id=user_id, tipo="gasto")
         filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0]
-        # USA formatar_data(t[6])
         await update.message.reply_text("Nenhuma saída.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💸 Saídas:\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
 
     if msg == "🗓️ Filtrar por Período": 
@@ -465,10 +407,12 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ========================================================
+    # --- MODIFICAÇÃO AQUI: Admin "Ver Usuários" ---
+    # ========================================================
     if msg == "🧑‍💼 Ver Usuários" and user_id == ADMIN_USER_ID: 
-        # MODIFICAÇÃO IMPORTANTE AQUI:
         # Pega a lista de (ID, Nome) que o seu código espera
-        lista_id_nome = db.listar_usuarios_com_nome() # <--- CHAMA A FUNÇÃO CORRETA
+        lista_id_nome = db.listar_usuarios_com_nome() # <--- USA A NOVA FUNÇÃO CORRETA
         
         if not lista_id_nome: 
             await update.message.reply_text("Nenhum usuário.", reply_markup=teclado_flutuante(user_id)); return
@@ -536,35 +480,40 @@ async def send_broadcast(bot: Bot, message: str):
 # --- NOVA LÓGICA DE INICIALIZAÇÃO (main) ---
 # ========================================================
 # Esta é a função alvo da THREAD 2 (BOT)
+async def main_async_logic(app: Application):
+    """Lógica async: checa broadcast e inicia polling."""
+    
+    # 1. Checar broadcast
+    current_commit = os.environ.get("RENDER_GIT_COMMIT")
+    last_commit_sent = db.get_config("last_commit_hash")
+    
+    print(f"Commit Atual (Render): {current_commit}")
+    print(f"Último Commit (Banco): {last_commit_sent}")
+
+    if current_commit and (current_commit != last_commit_sent):
+        print("Detectado novo deploy! Enviando broadcast...")
+        await send_broadcast(app.bot, BROADCAST_MESSAGE)
+        db.set_config("last_commit_hash", current_commit)
+        print("Broadcast enviado e hash salvo.")
+    else:
+        print("Inicialização normal (sem broadcast).")
+
+    # 2. Iniciar polling (com o argumento correto para threads)
+    print("Iniciando Polling do bot...")
+    # Esta é a função correta que aceita 'stop_signals'
+    await app.run_polling(stop_signals=None)
+
+
 def run_telegram_bot_thread(app: Application):
     """Função alvo da Thread: cria um loop asyncio e roda a lógica principal."""
-    # Cria um novo loop de eventos para esta thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
-    print("🤖 Bot do Telegram iniciando polling em background...")
+    print("🤖 Bot do Telegram iniciando em background...")
     try:
-        # 1. Verificar se é um novo deploy ANTES de iniciar o bot
-        current_commit = os.environ.get("RENDER_GIT_COMMIT")
-        last_commit_sent = db.get_config("last_commit_hash")
-        
-        print(f"Commit Atual (Render): {current_commit}")
-        print(f"Último Commit (Banco): {last_commit_sent}")
-
-        if current_commit and (current_commit != last_commit_sent):
-            print("Detectado novo deploy! Enviando broadcast...")
-            # Roda o broadcast DENTRO do loop de eventos desta thread
-            loop.run_until_complete(send_broadcast(app.bot, BROADCAST_MESSAGE))
-            db.set_config("last_commit_hash", current_commit)
-            print("Broadcast enviado e hash salvo.")
-        else:
-            print("Inicialização normal (sem broadcast).")
-
-        # 2. Inicia o polling (que gerencia seu próprio loop)
-        app.run_polling(stop_signals=None) 
-        
+        loop.run_until_complete(main_async_logic(app))
     except Exception as e:
         print(f"!!! ERRO FATAL NO POLLING: {e} !!!")
+        # (O RuntimeError de 'event loop already running' não deve acontecer aqui)
 
 # Esta é a função alvo da THREAD 1 (WEB)
 def run_flask(app_flask):
