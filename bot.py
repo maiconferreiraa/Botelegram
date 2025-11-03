@@ -21,9 +21,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# ==================================
-# --- MODIFICAÇÃO: IMPORT FALTANDO ---
-# ==================================
+# Import do Flask e Thread
 from flask import Flask
 from threading import Thread
 # ----------------------------------------
@@ -39,7 +37,6 @@ ADMIN_USER_ID = 853716041 # ID @maiconjbf
 # --- MAPEAMENTO DE CATEGORIAS (Sem alteração) ---
 # ===================================================================
 MAPEAMENTO_CATEGORIAS = {
-    # --- GASTOS ---
     "Alimentação": ["supermercado", "mercado", "lanche", "churrasco", "restaurante", "ifood", "rappi", "padaria", "açougue", "hortifruti", "pizza", "comida", "jantar", "almoço", "café", "bebida"],
     "Transporte": ["gasolina", "uber", "99", "estacionamento", "ipva", "seguro", "carro", "manutenção", "onibus", "metrô", "passagem", "combustível", "pedagio", "taxi", "aplicativo", "app"],
     "Moradia": ["aluguel", "condomínio", "iptu", "luz", "água", "internet", "gás", "diarista", "faxina", "energia", "net", "claro", "vivo", "oi", "tim", "conserto", "reparo", "internet celular", "celular internet"],
@@ -57,19 +54,20 @@ MAPEAMENTO_CATEGORIAS = {
     "Outras Entradas": ["entrada", "ganhei", "recebi", "pix", "reembolso", "presente"]
 }
 
-# =======================
-# --- FUNÇÕES HELPER (Sem alteração) ---
-# =======================
-def encontrar_categoria_por_palavra(palavras: list):
+# ===================================================================
+# --- MODIFICAÇÃO: FUNÇÃO HELPER ---
+# ===================================================================
+def encontrar_categoria_e_descricao(palavras: list):
+    """Procura por palavras-chave e retorna a Categoria-Pai E a palavra-chave."""
     for palavra in palavras:
         for categoria_pai, keywords in MAPEAMENTO_CATEGORIAS.items():
-            if palavra in keywords: return categoria_pai
-    return None
+            if palavra in keywords:
+                return (categoria_pai, palavra.capitalize()) # Retorna (ex: "Alimentação", "Lanche")
+    return (None, None) # Nenhuma palavra-chave encontrada
 
 LOCAL_TIMEZONE = pytz.timezone('America/Sao_Paulo') # Fuso de Brasília/SP
 
 def formatar_data(data_utc):
-    """Converte um datetime UTC para uma string formatada em GMT-3."""
     if data_utc is None: return "Data N/A"
     try:
         if data_utc.tzinfo is None: data_utc = pytz.utc.localize(data_utc)
@@ -84,9 +82,9 @@ def formatar_valor(valor):
     except (decimal.InvalidOperation, TypeError, ValueError): valor_decimal = Decimal("0.00")
     return f"{valor_decimal:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# =======================
-# Interpretação de mensagens (Sem alteração)
-# =======================
+# ===================================================================
+# --- MODIFICAÇÃO: Interpretação de mensagens ---
+# ===================================================================
 def interpretar_mensagem(texto: str):
     texto = texto.lower().strip()
     match = re.search(r"(\d[\d.,]*)", texto)
@@ -97,6 +95,8 @@ def interpretar_mensagem(texto: str):
         except decimal.InvalidOperation: return {"acao": "desconhecido"}
         if valor_num <= 0: return {"acao": "desconhecido"}
         palavras = texto.split(); palavras_texto = [p for p in palavras if valor_txt not in p]
+        
+        # --- Lógica de Cartão (Sem alteração) ---
         cartao = None; metodo = "dinheiro"; cartoes_lista = ["nubank", "santander", "inter", "caixa"]; stop_words_cartao = cartoes_lista + ["cartão", "cartao"]
         for c in cartoes_lista:
             if c in palavras_texto: cartao = c.capitalize(); metodo = "cartao"; break
@@ -112,21 +112,38 @@ def interpretar_mensagem(texto: str):
                     else: break
                 if nome_cartao_palavras: cartao = " ".join(nome_cartao_palavras).capitalize()
                 else: cartao = "Cartão"
+        
+        # --- Determina Tipo e Categoria (MODIFICADO) ---
         entradas_keywords = [kw for cat, kws in MAPEAMENTO_CATEGORIAS.items() if cat in ["Salário", "Vendas", "Outras Entradas", "Investimentos"] for kw in kws]
         is_entrada = any(p in entradas_keywords for p in palavras_texto)
+        
+        # Encontra a categoria-pai e a descrição (palavra-chave)
+        categoria_pai, descricao_item = encontrar_categoria_e_descricao(palavras_texto)
+        
+        # Define as stopwords gerais
+        stop_words_fallback = stop_words_cartao
+        if cartao: stop_words_fallback.extend(cartao.lower().split())
+
+        # Encontra a primeira palavra (fallback)
+        fallback_word = next((p for p in palavras_texto if p.isalpha() and p not in stop_words_fallback), "Outros")
+
         if is_entrada:
-            categoria_mapeada = encontrar_categoria_por_palavra(palavras_texto)
-            categoria_final = categoria_mapeada if categoria_mapeada else "Entrada"
-            return {"acao": "add", "tipo": "entrada", "valor_num": valor_num, "valor_txt": valor_txt, "categoria": categoria_final.capitalize(), "metodo": metodo, "cartao": cartao}
-        else:
-            categoria_mapeada = encontrar_categoria_por_palavra(palavras_texto); categoria_final = None
-            if categoria_mapeada: categoria_final = categoria_mapeada
-            else:
-                stop_words_fallback = stop_words_cartao
-                if cartao: stop_words_fallback.extend(cartao.lower().split())
-                categoria_primeira_palavra = next((p for p in palavras_texto if p.isalpha() and p not in stop_words_fallback), "Outros")
-                categoria_final = categoria_primeira_palavra.capitalize()
-            return {"acao": "add", "tipo": "gasto", "valor_num": valor_num, "valor_txt": valor_txt, "categoria": categoria_final.capitalize(), "metodo": metodo, "cartao": cartao}
+            categoria_final = categoria_pai if categoria_pai else "Entrada"
+            # Se a descrição não foi encontrada, usa o fallback. Se não, usa a palavra-chave.
+            descricao_final = descricao_item if descricao_item else fallback_word.capitalize()
+            
+            return {"acao": "add", "tipo": "entrada", "valor_num": valor_num, "valor_txt": valor_txt, 
+                    "categoria": categoria_final.capitalize(), 
+                    "descricao": descricao_final, # <-- NOVO CAMPO
+                    "metodo": metodo, "cartao": cartao}
+        else: # É um gasto
+            categoria_final = categoria_pai if categoria_pai else fallback_word.capitalize()
+            descricao_final = descricao_item if descricao_item else fallback_word.capitalize()
+
+            return {"acao": "add", "tipo": "gasto", "valor_num": valor_num, "valor_txt": valor_txt, 
+                    "categoria": categoria_final.capitalize(), 
+                    "descricao": descricao_final, # <-- NOVO CAMPO
+                    "metodo": metodo, "cartao": cartao}
     return {"acao": "desconhecido"}
 
 
@@ -158,17 +175,21 @@ def teclado_filtros_periodo():
     teclado = [["Hoje", "Esta Semana", "Este Mês"], ["Mês Passado", "Este Ano"], ["Cancelar"]]
     return ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
 
-# =======================
-# Funções de Gráficos, PDF, XLSX, etc. (Sem alteração)
-# =======================
+# ===================================================================
+# --- MODIFICAÇÃO: Funções de Relatório (PDF, XLSX, Extratos) ---
+# ===================================================================
+# (Atualizadas para mostrar a nova 'descricao' t[7])
+
 def grafico_gastos_pizza(user_id=None, inicio=None, fim=None):
+    # Gráfico de Pizza continua agrupando pela Categoria-Pai (t[3]). Correto.
     rows = db.gastos_por_categoria(user_id=user_id, inicio=inicio, fim=fim)
     if not rows: return None
     labels = [r[0] for r in rows]; valores = [float(r[1]) for r in rows]; fig, ax = plt.subplots()
-    ax.pie(valores, labels=labels, autopct="%1.1f%%", startangle=90); ax.set_title("Gastos por Categoria")
+    ax.pie(valores, labels=labels, autopct="%1.1f%%", startangle=90); ax.set_title("Gastos por Categoria (Pai)")
     buf = io.BytesIO(); plt.savefig(buf, format="png", bbox_inches="tight"); buf.seek(0); plt.close(fig); return buf
 
 def grafico_mensal_barras(user_id=None, meses=6):
+    # Sem alteração, pois usa get_soma()
     labels, entradas_vals, gastos_vals = db.series_mensais(user_id=user_id, meses=meses)
     if not labels: return None
     x = list(range(len(labels))); fig, ax = plt.subplots(); width = 0.4
@@ -187,30 +208,40 @@ def gerar_pdf(user_id=None, filename="relatorio.pdf", inicio=None, fim=None):
     story.append(Paragraph("💰 Entradas:", styles["Heading2"]))
     trans_e = db.get_todas(user_id=user_id, tipo="entrada", inicio=inicio, fim=fim)
     for t in trans_e:
-        try: story.append(Paragraph(f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}", styles["Normal"]))
+        try: 
+            # t[3] = Categoria, t[7] = Descrição
+            story.append(Paragraph(f"➡️ R$ {formatar_valor(t[2])} ({t[3]} / {t[7]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}", styles["Normal"]))
         except (decimal.InvalidOperation, TypeError, ValueError): pass
     story.append(Spacer(1, 20)); story.append(Paragraph("💸 Saídas:", styles["Heading2"]))
     trans_s = db.get_todas(user_id=user_id, tipo="gasto", inicio=inicio, fim=fim)
     for t in trans_s:
-        try: story.append(Paragraph(f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}", styles["Normal"]))
+        try: 
+            # t[3] = Categoria, t[7] = Descrição
+            story.append(Paragraph(f"⬅️ R$ {formatar_valor(t[2])} ({t[3]} / {t[7]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}", styles["Normal"]))
         except (decimal.InvalidOperation, TypeError, ValueError): pass
     doc.build(story); return filename
 
 def gerar_xlsx(user_id=None, filename="relatorio.xlsx", inicio=None, fim=None):
-    wb = Workbook(); ws = wb.active; ws.title = "Relatório"; ws.append(["Tipo", "Valor", "Categoria", "Método", "Cartão", "Data"])
+    wb = Workbook(); ws = wb.active; ws.title = "Relatório"
+    # Adiciona a coluna "Descrição"
+    ws.append(["Tipo", "Valor", "Categoria (Pai)", "Descrição (Item)", "Método", "Cartão", "Data"])
     transacoes = db.get_todas(user_id=user_id, inicio=inicio, fim=fim)
     for t in transacoes:
         try: valor_num = Decimal(t[2])
         except (decimal.InvalidOperation, TypeError, ValueError): valor_num = Decimal("0.00")
-        ws.append([t[1], valor_num, t[3], t[4], t[5] or "Dinheiro", formatar_data(t[6])])
+        # Adiciona t[7] (Descrição) na nova coluna
+        ws.append([t[1], valor_num, t[3], t[7], t[4], t[5] or "Dinheiro", formatar_data(t[6])])
+        
     entradas = db.get_soma(user_id, "entrada", inicio=inicio, fim=fim); gastos = db.get_soma(user_id, "gasto", inicio=inicio, fim=fim); saldo = entradas - gastos
     ws.append([]); ws.append(["Entradas", entradas]); ws.append(["Gastos", gastos]); ws.append(["Saldo", saldo])
     num_format = 'R$ #,##0.00'; max_row = ws.max_row
+    # Ajusta o loop para a nova coluna (agora coluna 'B')
     for cell in ws['B']: cell.number_format = num_format
     ws[f'B{max_row-2}'].number_format = num_format; ws[f'B{max_row-1}'].number_format = num_format; ws[f'B{max_row}'].number_format = num_format
     wb.save(filename); return filename
 
 def gastos_por_cartao(user_id):
+    # Sem alteração
     rows = db.get_gastos_por_cartao(user_id=user_id)
     if not rows: return "💳 Gastos por Cartão:\nNenhum gasto registrado."
     texto = "💳 Gastos por Cartão:\n";
@@ -218,6 +249,7 @@ def gastos_por_cartao(user_id):
     return texto
 
 def verificar_alerta(user_id):
+    # Sem alteração
     entradas = db.get_soma(user_id, "entrada"); gastos = db.get_soma(user_id, "gasto"); saldo = entradas - gastos
     status = None
     if saldo < 0: status = "🔴😟 Saldo Negativo"
@@ -237,11 +269,13 @@ async def enviar_extrato_filtrado(update: Update, context: ContextTypes.DEFAULT_
     else:
         if entradas_filtradas:
             texto += "--- *Entradas* ---\n";
-            for t in entradas_filtradas: texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {formatar_data(t[6])}\n"
+            # Mostra Categoria (t[3]) e Descrição (t[7])
+            for t in entradas_filtradas: texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]} / {t[7]}) - {formatar_data(t[6])}\n"
             texto += "\n"
         if saidas_filtradas:
             texto += "--- *Saídas* ---\n"
-            for t in saidas_filtradas: texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}\n"
+            # Mostra Categoria (t[3]) e Descrição (t[7])
+            for t in saidas_filtradas: texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]} / {t[7]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}\n"
             texto += "\n"
         texto += "--- *Resumo do Período* ---\n"; texto += f"💰 Total Entradas: R$ {formatar_valor(total_entradas)}\n"; texto += f"💸 Total Gastos: R$ {formatar_valor(total_gastos)}\n"; texto += f"📌 Saldo Período: R$ {formatar_valor(saldo_periodo)}\n"
     await update.message.reply_text(texto, parse_mode='Markdown', reply_markup=teclado_flutuante(user_id))
@@ -263,11 +297,13 @@ async def enviar_extrato_por_categoria(update: Update, context: ContextTypes.DEF
         return
     if entradas_filtradas:
         texto += "--- *Entradas* ---\n"
-        for t in entradas_filtradas: texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {formatar_data(t[6])}\n"
+        # Mostra Categoria (t[3]) e Descrição (t[7])
+        for t in entradas_filtradas: texto += f"➡️ R$ {formatar_valor(t[2])} ({t[3]} / {t[7]}) - {formatar_data(t[6])}\n"
         texto += "\n"
     if saidas_filtradas:
         texto += "--- *Saídas* ---\n"
-        for t in saidas_filtradas: texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}\n"
+        # Mostra Categoria (t[3]) e Descrição (t[7])
+        for t in saidas_filtradas: texto += f"⬅️ R$ {formatar_valor(t[2])} ({t[3]} / {t[7]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}\n"
         texto += "\n"
     texto += f"--- *Resumo da Categoria: {categoria_desejada.capitalize()}* ---\n"
     texto += f"💰 Total Entradas: R$ {formatar_valor(total_entradas)}\n"; texto += f"💸 Total Gastos: R$ {formatar_valor(total_gastos)}\n"; texto += f"📌 Saldo Categoria: R$ {formatar_valor(saldo_categoria)}\n"
@@ -283,34 +319,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      "Use o teclado para outras opções:",
                                      reply_markup=teclado_flutuante(user_id))
 
-# ==================================
-# --- NOVA FUNÇÃO DE BROADCAST MANUAL ---
-# ==================================
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """(Admin) Envia uma mensagem manual para todos os usuários."""
     user_id = update.message.from_user.id
-    
-    # 1. Verifica se é o Admin
     if user_id != ADMIN_USER_ID:
         await update.message.reply_text("❌ Você não tem permissão para usar este comando.")
         return
-
-    # 2. Pega a mensagem (o texto depois de /broadcast)
     mensagem_para_enviar = " ".join(context.args)
-    
     if not mensagem_para_enviar:
         await update.message.reply_text("Uso: /broadcast [sua mensagem aqui]")
         return
-        
-    # 3. Confirma e chama a função de broadcast
-    total_usuarios = len(db.listar_usuarios()) # Pega o total para o feedback
+    total_usuarios = len(db.listar_usuarios())
     await update.message.reply_text(f"🚀 Iniciando envio para {total_usuarios} usuários...")
-    
     await send_broadcast(context.bot, mensagem_para_enviar)
-    
     await update.message.reply_text("✅ Broadcast manual concluído.")
 
-
+# ==========================================================
+# --- MODIFICAÇÃO: Função Responder (Atualizada) ---
+# ==========================================================
 async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id; user_name = update.message.from_user.first_name
     msg = update.message.text
@@ -335,7 +361,7 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if 'aguardando_filtro_categoria' in context.user_data: del context.user_data['aguardando_filtro_categoria']
         await update.message.reply_text("Ação cancelada.", reply_markup=teclado_flutuante(user_id)); return
 
-    # --- Bloco Admin (Corrigido para 'None' E DATA) ---
+    # --- Bloco Admin (MODIFICADO para mostrar descrição) ---
     if user_id == ADMIN_USER_ID and "admin_selecionado" in context.user_data:
         selecionado_id, selecionado_nome = context.user_data["admin_selecionado"]
         if 'aguardando_filtro' in context.user_data: del context.user_data['aguardando_filtro']
@@ -343,13 +369,15 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if msg == "💰 Entradas":
             transacoes = db.get_todas(user_id=selecionado_id, tipo="entrada")
             filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0] 
-            texto = f"💰 Entradas de {selecionado_nome}\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]);
+            # Mostra Categoria (t[3]) e Descrição (t[7])
+            texto = f"💰 Entradas de {selecionado_nome}\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]} / {t[7]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]);
             if not filtradas: texto = f"{selecionado_nome} não tem entradas."; 
             await update.message.reply_text(texto, reply_markup=teclado_admin_usuario_selecionado())
         elif msg == "💸 Saídas":
             transacoes = db.get_todas(user_id=selecionado_id, tipo="gasto")
             filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0] 
-            texto = f"💸 Saídas de {selecionado_nome}\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]);
+            # Mostra Categoria (t[3]) e Descrição (t[7])
+            texto = f"💸 Saídas de {selecionado_nome}\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]} / {t[7]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]);
             if not filtradas: texto = f"{selecionado_nome} não tem saídas."; 
             await update.message.reply_text(texto, reply_markup=teclado_admin_usuario_selecionado())
         elif msg == "🧾 Saldo Geral":
@@ -363,7 +391,7 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Inválido.", reply_markup=teclado_admin_usuario_selecionado())
         return
 
-    # --- Resposta Filtro Período (Atualizado com novo nome) ---
+    # --- Resposta Filtro Período (Sem alteração) ---
     if 'aguardando_filtro' in context.user_data:
         del context.user_data['aguardando_filtro']; hoje = datetime.now()
         titulo_periodo = msg
@@ -375,7 +403,7 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: await update.message.reply_text("Filtro cancelado.", reply_markup=teclado_flutuante(user_id)); return
         await enviar_extrato_filtrado(update, context, inicio, fim, titulo_periodo); return
 
-    # --- Lógica Usuário Comum (Atualizada com novos emojis/nomes) ---
+    # --- Lógica Usuário Comum (MODIFICADA para mostrar descrição) ---
     if msg == "🗑️ Resetar Valores": 
         await update.message.reply_text("Período para resetar:", reply_markup=ReplyKeyboardMarkup([["Último valor", "Hoje"], ["Última semana", "Este mês"], ["Tudo"], ["Cancelar"]], resize_keyboard=True, one_time_keyboard=True)); return
     elif msg in ["Último valor", "Hoje", "Última semana", "Este mês", "Tudo"]: 
@@ -389,12 +417,14 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg == "📥 Ver Entradas": 
         transacoes = db.get_todas(user_id=user_id, tipo="entrada")
         filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0]
-        await update.message.reply_text("Nenhuma entrada.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💰 Entradas:\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]}) - {formatar_data(t[6])}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
+        # Mostra Categoria (t[3]) e Descrição (t[7])
+        await update.message.reply_text("Nenhuma entrada.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💰 Entradas:\n" + "\n".join([f"➡️ R$ {formatar_valor(t[2])} ({t[3]} / {t[7]}) - {formatar_data(t[6])}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
     
     if msg == "📤 Ver Saídas": 
         transacoes = db.get_todas(user_id=user_id, tipo="gasto")
         filtradas = [t for t in transacoes if t[2] is not None and Decimal(t[2]) > 0]
-        await update.message.reply_text("Nenhuma saída.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💸 Saídas:\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
+        # Mostra Categoria (t[3]) e Descrição (t[7])
+        await update.message.reply_text("Nenhuma saída.", reply_markup=teclado_flutuante(user_id)) if not filtradas else await update.message.reply_text("💸 Saídas:\n" + "\n".join([f"⬅️ R$ {formatar_valor(t[2])} ({t[3]} / {t[7]}) - {t[5] or 'Dinheiro'} - {formatar_data(t[6])}" for t in filtradas]), reply_markup=teclado_flutuante(user_id)); return
 
     if msg == "🗓️ Filtrar por Período": 
         context.user_data['aguardando_filtro'] = True; await update.message.reply_text("Selecione o período:", reply_markup=teclado_filtros_periodo()); return
@@ -441,7 +471,7 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if msg == "🧑‍💼 Ver Usuários" and user_id == ADMIN_USER_ID: 
-        lista_id_nome = db.listar_usuarios_com_nome() 
+        lista_id_nome = db.listar_usuarios_com_nome() # <-- USA A FUNÇÃO CORRETA
         if not lista_id_nome: 
             await update.message.reply_text("Nenhum usuário.", reply_markup=teclado_flutuante(user_id)); return
         teclado_usuarios = [[f"{u[0]} - {u[1]}"] for u in lista_id_nome] + [["⬅️ Voltar"]]
@@ -451,10 +481,17 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         selecionado_id = int(msg.split(" - ")[0]); selecionado_nome = msg.split(" - ")[1]; context.user_data["admin_selecionado"] = (selecionado_id, selecionado_nome); await update.message.reply_text(f"Gerenciando: {selecionado_nome}.", reply_markup=teclado_admin_usuario_selecionado()); return
 
     # --- Interpretação de Mensagem (Adicionar transação) ---
+    # --- MODIFICADO para passar a 'descricao' ---
     resultado = interpretar_mensagem(msg)
     if resultado["acao"] == "add":
-        db.add_transacao(user_id, resultado["tipo"], resultado["valor_num"], resultado["valor_txt"], resultado["categoria"], resultado["metodo"], resultado["cartao"], user_name)
-        msg_resp = f"✅ {resultado['tipo'].capitalize()} R$ {formatar_valor(resultado['valor_num'])} (Cat: {resultado['categoria']})"
+        # Passa a nova 'descricao' para o banco
+        db.add_transacao(
+            user_id, resultado["tipo"], resultado["valor_num"], resultado["valor_txt"], 
+            resultado["categoria"], resultado["descricao"], # <-- NOVO ARGUMENTO
+            resultado["metodo"], resultado["cartao"], user_name
+        )
+        # Mostra a Categoria (Pai) e a Descrição (Item) na confirmação
+        msg_resp = f"✅ {resultado['tipo'].capitalize()} R$ {formatar_valor(resultado['valor_num'])} (Cat: {resultado['categoria']} / {resultado['descricao']})"
         if resultado['cartao']: msg_resp += f"\n💳 Cartão: {resultado['cartao']}"
         alerta = verificar_alerta(user_id)
         if alerta: msg_resp += f"\n\n{alerta}"
@@ -463,63 +500,45 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Não entendi. Digite valor + descrição (ex: '50 lanche').", reply_markup=teclado_flutuante(user_id))
 
 # ===================================================================
-# --- MODIFICAÇÃO FINAL: Lógica de Inicialização e Broadcast ---
+# --- Lógica de Inicialização e Broadcast (Sem alteração) ---
 # ===================================================================
 
-# Mensagem que será enviada. Edite aqui.
 BROADCAST_MESSAGE = """
 🎉 **Atualização do Bot Finanças!** 🎉
 
 O bot foi atualizado com novas melhorias e correções. 
+*** Foi alterado o fuso horário GMT-3 ***
 (Para iniciar o bot envie /start novamente).
 
 Obrigado por usar!
 """
 
-# ==================================
-# --- NOVA FUNÇÃO DE BROADCAST ---
-# ==================================
 async def send_broadcast(bot: Bot, message: str):
-    """Envia uma mensagem para todos os usuários no banco de dados."""
-    user_ids = db.listar_usuarios() # <--- CHAMA A FUNÇÃO CORRETA (SÓ IDs)
-    
+    user_ids = db.listar_usuarios() # Chama a função correta (só IDs)
     if not user_ids:
         print("Broadcast: Nenhum usuário encontrado para enviar.")
         return
-        
     print(f"Iniciando broadcast para {len(user_ids)} usuários...")
-    
     for user_id in user_ids:
         try:
             await bot.send_message(chat_id=user_id, text=message)
             print(f"Sucesso: Mensagem enviada para {user_id}")
             await asyncio.sleep(0.1) 
-        except Forbidden:
-            print(f"Falha: Usuário {user_id} bloqueou o bot.")
-        except ChatMigrated as e:
-            print(f"Falha: Chat {user_id} migrou para {e.new_chat_id}")
-        except Exception as e:
-            print(f"Falha: Erro desconhecido com user_id {user_id}: {e}")
+        except Forbidden: print(f"Falha: Usuário {user_id} bloqueou o bot.")
+        except ChatMigrated as e: print(f"Falha: Chat {user_id} migrou para {e.new_chat_id}")
+        except Exception as e: print(f"Falha: Erro desconhecido com user_id {user_id}: {e}")
     print("Broadcast concluído.")
 
-# ========================================================
-# --- NOVA LÓGICA DE INICIALIZAÇÃO (main) ---
-# ========================================================
-# Esta é a função alvo da THREAD 2 (BOT)
 def run_telegram_bot_thread(app: Application):
     """Função alvo da Thread: cria um loop asyncio e roda a lógica principal."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
     print("🤖 Bot do Telegram iniciando em background...")
     try:
-        # 1. Verificar se é um novo deploy ANTES de iniciar o bot
         current_commit = os.environ.get("RENDER_GIT_COMMIT")
         last_commit_sent = db.get_config("last_commit_hash")
-        
         print(f"Commit Atual (Render): {current_commit}")
         print(f"Último Commit (Banco): {last_commit_sent}")
-
         if current_commit and (current_commit != last_commit_sent):
             print("Detectado novo deploy! Enviando broadcast...")
             loop.run_until_complete(send_broadcast(app.bot, BROADCAST_MESSAGE))
@@ -527,15 +546,11 @@ def run_telegram_bot_thread(app: Application):
             print("Broadcast enviado e hash salvo.")
         else:
             print("Inicialização normal (sem broadcast).")
-
-        # 2. Inicia o polling (que gerencia seu próprio loop)
         print("Iniciando Polling do bot...")
         app.run_polling(stop_signals=None) 
-        
     except Exception as e:
         print(f"!!! ERRO FATAL NO POLLING: {e} !!!")
 
-# Esta é a função alvo da THREAD 1 (WEB)
 def run_flask(app_flask):
     """Roda o Flask (Waitress) na thread principal (bloqueando)."""
     print("\n--- INICIANDO FLASK (Waitress) ---")
@@ -548,13 +563,10 @@ def run_flask(app_flask):
         app_flask.run(host='0.0.0.0', port=8080)
     except Exception as e: print(f"!!! ERRO FLASK: {e} !!!")
 
-# ==================================
-# --- BLOCO DE INICIALIZAÇÃO FINAL ---
-# ==================================
 if __name__ == "__main__":
     TOKEN = os.environ.get('BOT_TOKEN')
     app = None 
-    app_flask = Flask('') # Define o app_flask globalmente
+    app_flask = Flask('') 
 
     @app_flask.route('/')
     def home(): return "Estou vivo!"
@@ -564,17 +576,11 @@ if __name__ == "__main__":
     else:
         app = Application.builder().token(TOKEN).build()
         app.add_handler(CommandHandler("start", start))
-        
-        # --- MODIFICAÇÃO AQUI ---
-        # Adiciona o novo handler para o broadcast manual
         app.add_handler(CommandHandler("broadcast", broadcast_command)) 
-        
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
         print("🤖 Bot configurado.")
-
-        # 1. Inicia a lógica do bot (Async + Broadcast + Polling) em uma thread separada
+        
         bot_thread = Thread(target=run_telegram_bot_thread, args=(app,), daemon=True)
         bot_thread.start()
         
-        # 2. Roda o Flask (bloqueando) na thread principal
         run_flask(app_flask)

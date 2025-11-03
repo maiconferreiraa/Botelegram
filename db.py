@@ -9,13 +9,11 @@ class Database:
         if not self.db_url:
             raise ValueError("Erro: A variável de ambiente DATABASE_URL não foi configurada.")
         
-        # Cria todas as tabelas no início
         self.criar_tabela_usuarios()
         self.criar_tabela_transacoes()
         self.criar_tabela_config()
 
     def _get_connection(self):
-        """Helper para obter uma nova conexão (thread-safe)."""
         try:
             conn = psycopg2.connect(self.db_url)
             return conn, conn.cursor()
@@ -24,7 +22,6 @@ class Database:
             return None, None
 
     def _close_connection(self, conn, cursor):
-        """Helper para fechar conexões."""
         if cursor: cursor.close()
         if conn: conn.close()
         
@@ -50,6 +47,9 @@ class Database:
         try:
             conn, cursor = self._get_connection()
             if not cursor: return
+            
+            # --- MODIFICAÇÃO AQUI ---
+            # Adiciona a nova coluna 'descricao'
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS transacoes (
                     id SERIAL PRIMARY KEY,
@@ -61,9 +61,20 @@ class Database:
                     metodo TEXT,
                     cartao TEXT,
                     data TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    descricao TEXT, 
                     FOREIGN KEY (user_id) REFERENCES usuarios (user_id)
                 )
             """)
+            
+            # Comando para adicionar a coluna se a tabela já existir (não quebra o bot)
+            try:
+                cursor.execute("ALTER TABLE transacoes ADD COLUMN descricao TEXT")
+            except psycopg2.Error as e:
+                if e.pgcode == '42701': # 'duplicate_column'
+                    pass # Coluna já existe, tudo bem
+                else:
+                    raise
+            
             conn.commit()
         except Exception as e:
             print(f"Erro ao criar tabela transacoes: {e}")
@@ -95,12 +106,9 @@ class Database:
             if not cursor: return None
             cursor.execute("SELECT value FROM app_config WHERE key = %s", (key,))
             row = cursor.fetchone()
-            if row:
-                result = row[0]
-        except Exception as e:
-            print(f"Erro em get_config: {e}")
-        finally:
-            self._close_connection(conn, cursor)
+            if row: result = row[0]
+        except Exception as e: print(f"Erro em get_config: {e}")
+        finally: self._close_connection(conn, cursor)
         return result
 
     def set_config(self, key, value):
@@ -118,21 +126,24 @@ class Database:
         finally:
             self._close_connection(conn, cursor)
     
-    # --- Funções do Bot (Convertidas para PostgreSQL) ---
-
-    def add_transacao(self, user_id, tipo, valor_num, valor_txt, categoria, metodo="dinheiro", cartao=None, nome=""):
+    # --- MODIFICAÇÃO AQUI ---
+    # Adiciona 'descricao' na função de adicionar
+    def add_transacao(self, user_id, tipo, valor_num, valor_txt, categoria, descricao, metodo="dinheiro", cartao=None, nome=""):
         conn, cursor = None, None
         try:
             conn, cursor = self._get_connection()
             if not cursor: return
+            
             cursor.execute("""
                 INSERT INTO usuarios (user_id, nome) VALUES (%s, %s)
                 ON CONFLICT(user_id) DO UPDATE SET nome = EXCLUDED.nome
             """, (user_id, nome))
+            
+            # Adiciona 'descricao' ao INSERT
             cursor.execute("""
-                INSERT INTO transacoes (user_id, tipo, valor_num, valor_txt, categoria, metodo, cartao, data)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (user_id, tipo, float(valor_num), valor_txt, categoria, metodo, cartao, datetime.now()))
+                INSERT INTO transacoes (user_id, tipo, valor_num, valor_txt, categoria, metodo, cartao, data, descricao)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (user_id, tipo, float(valor_num), valor_txt, categoria, metodo, cartao, datetime.now(), descricao))
             conn.commit()
         except Exception as e:
             print(f"Erro em add_transacao: {e}")
@@ -148,40 +159,39 @@ class Database:
             if not cursor: return Decimal(0)
             query = "SELECT SUM(valor_num) FROM transacoes WHERE tipo=%s AND user_id=%s"
             params = [tipo, user_id]
-            if inicio:
-                query += " AND data::date >= %s::date"
-                params.append(inicio.strftime("%Y-%m-%d"))
-            if fim:
-                query += " AND data::date <= %s::date"
-                params.append(fim.strftime("%Y-%m-%d"))
+            if inicio: query += " AND data::date >= %s::date"; params.append(inicio.strftime("%Y-%m-%d"))
+            if fim: query += " AND data::date <= %s::date"; params.append(fim.strftime("%Y-%m-%d"))
             cursor.execute(query, params)
             result = cursor.fetchone()[0]
-        except Exception as e:
-            print(f"Erro em get_soma: {e}")
-        finally:
-            self._close_connection(conn, cursor)
+        except Exception as e: print(f"Erro em get_soma: {e}")
+        finally: self._close_connection(conn, cursor)
         return Decimal(result or 0)
 
+    # --- MODIFICAÇÃO AQUI ---
+    # Adiciona 'descricao' ao SELECT
     def get_todas(self, user_id=None, tipo=None, inicio=None, fim=None):
         conn, cursor = None, None
         results = []
         try:
             conn, cursor = self._get_connection()
             if not cursor: return []
-            query = "SELECT id, tipo, valor_num, categoria, metodo, cartao, data FROM transacoes WHERE 1=1"
+            
+            # Adicionado 'descricao' (o novo último item)
+            query = "SELECT id, tipo, valor_num, categoria, metodo, cartao, data, descricao FROM transacoes WHERE 1=1"
             params = []
             if tipo: query += " AND tipo=%s"; params.append(tipo)
             if user_id: query += " AND user_id=%s"; params.append(user_id)
             if inicio: query += " AND data::date >= %s::date"; params.append(inicio.strftime("%Y-%m-%d"))
             if fim: query += " AND data::date <= %s::date"; params.append(fim.strftime("%Y-%m-%d"))
             query += " ORDER BY id DESC" 
+            
             cursor.execute(query, params)
             results = cursor.fetchall()
         except Exception as e:
             print(f"Erro em get_todas: {e}")
         finally:
             self._close_connection(conn, cursor)
-        return results
+        return results # Agora retorna 8 colunas
 
     def limpar_transacoes(self, user_id=None, opcao=None):
         conn, cursor = None, None
@@ -212,31 +222,23 @@ class Database:
         finally:
             self._close_connection(conn, cursor)
 
-    # ========================================================
-    # --- MODIFICAÇÃO AQUI (Bug do Broadcast/Admin corrigido) ---
-    # ========================================================
-    
+    # --- Corrigido para retornar IDs (para Broadcast) ---
     def listar_usuarios(self):
-        """(CORRIGIDO) Retorna uma LISTA DE IDs de usuários (ex: [123, 456])."""
         conn, cursor = None, None
         results = []
         try:
             conn, cursor = self._get_connection()
             if not cursor: return []
-            
-            # Retorna apenas o ID, que é tudo que o broadcast precisa
             cursor.execute("SELECT user_id FROM usuarios ORDER BY user_id ASC")
-            # Converte a lista de tuplas [(123,), (456,)] em uma lista simples [123, 456]
             results = [row[0] for row in cursor.fetchall()]
         except Exception as e:
             print(f"Erro em listar_usuarios (só IDs): {e}")
         finally:
             self._close_connection(conn, cursor)
-        return results # Retorna [123, 456, 789]
+        return results 
         
-    # --- NOVA FUNÇÃO ---
+    # --- Nova função para Admin (retorna ID e Nome) ---
     def listar_usuarios_com_nome(self):
-        """(NOVO) Função separada para o Admin, retorna (ID, Nome)."""
         conn, cursor = None, None
         results = []
         try:
@@ -248,7 +250,7 @@ class Database:
             print(f"Erro em listar_usuarios_com_nome: {e}")
         finally:
             self._close_connection(conn, cursor)
-        return results # Retorna [(123, 'Maicon'), (456, 'Rute')]
+        return results 
 
     def gastos_por_categoria(self, user_id=None, inicio=None, fim=None):
         conn, cursor = None, None
