@@ -6,6 +6,7 @@ import decimal
 from decimal import Decimal
 from datetime import datetime, timedelta
 import asyncio
+from flask import Flask
 import pytz # Importa biblioteca de fuso horário
 
 # Imports do Bot
