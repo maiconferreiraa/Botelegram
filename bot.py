@@ -159,7 +159,7 @@ def teclado_filtros_periodo():
     return ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
 
 # =======================
-# Funções de Gráficos, PDF, XLSX, etc. (Sem alterações)
+# Funções de Gráficos, PDF, XLSX, etc. (Sem alteração)
 # =======================
 def grafico_gastos_pizza(user_id=None, inicio=None, fim=None):
     rows = db.gastos_por_categoria(user_id=user_id, inicio=inicio, fim=fim)
@@ -282,6 +282,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                      "Digite valor + descrição (ex: '150 mercado').\n"
                                      "Use o teclado para outras opções:",
                                      reply_markup=teclado_flutuante(user_id))
+
+# ==================================
+# --- NOVA FUNÇÃO DE BROADCAST MANUAL ---
+# ==================================
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin) Envia uma mensagem manual para todos os usuários."""
+    user_id = update.message.from_user.id
+    
+    # 1. Verifica se é o Admin
+    if user_id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Você não tem permissão para usar este comando.")
+        return
+
+    # 2. Pega a mensagem (o texto depois de /broadcast)
+    mensagem_para_enviar = " ".join(context.args)
+    
+    if not mensagem_para_enviar:
+        await update.message.reply_text("Uso: /broadcast [sua mensagem aqui]")
+        return
+        
+    # 3. Confirma e chama a função de broadcast
+    total_usuarios = len(db.listar_usuarios()) # Pega o total para o feedback
+    await update.message.reply_text(f"🚀 Iniciando envio para {total_usuarios} usuários...")
+    
+    await send_broadcast(context.bot, mensagem_para_enviar)
+    
+    await update.message.reply_text("✅ Broadcast manual concluído.")
+
 
 async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id; user_name = update.message.from_user.first_name
@@ -412,16 +440,10 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ========================================================
-    # --- MODIFICAÇÃO AQUI: Admin "Ver Usuários" ---
-    # ========================================================
     if msg == "🧑‍💼 Ver Usuários" and user_id == ADMIN_USER_ID: 
-        # Pega a lista de (ID, Nome) que o seu código espera
-        lista_id_nome = db.listar_usuarios_com_nome() # <--- USA A NOVA FUNÇÃO CORRETA
-        
+        lista_id_nome = db.listar_usuarios_com_nome() 
         if not lista_id_nome: 
             await update.message.reply_text("Nenhum usuário.", reply_markup=teclado_flutuante(user_id)); return
-        
         teclado_usuarios = [[f"{u[0]} - {u[1]}"] for u in lista_id_nome] + [["⬅️ Voltar"]]
         await update.message.reply_text("Gerenciar usuário:", reply_markup=ReplyKeyboardMarkup(teclado_usuarios, resize_keyboard=True, one_time_keyboard=True)); return
     
@@ -446,10 +468,10 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Mensagem que será enviada. Edite aqui.
 BROADCAST_MESSAGE = """
-🎉 **Atualização do Bot!** 🎉
+🎉 **Atualização do Bot Finanças!** 🎉
 
 O bot foi atualizado com novas melhorias e correções. 
-(Se o teclado parecer estranho, envie /start novamente).
+(Para iniciar o bot envie /start novamente).
 
 Obrigado por usar!
 """
@@ -459,8 +481,7 @@ Obrigado por usar!
 # ==================================
 async def send_broadcast(bot: Bot, message: str):
     """Envia uma mensagem para todos os usuários no banco de dados."""
-    # Pega a lista de IDs de usuário do banco
-    user_ids = db.listar_usuarios() # Esta função DEVE retornar uma lista de IDs [123, 456]
+    user_ids = db.listar_usuarios() # <--- CHAMA A FUNÇÃO CORRETA (SÓ IDs)
     
     if not user_ids:
         print("Broadcast: Nenhum usuário encontrado para enviar.")
@@ -472,7 +493,7 @@ async def send_broadcast(bot: Bot, message: str):
         try:
             await bot.send_message(chat_id=user_id, text=message)
             print(f"Sucesso: Mensagem enviada para {user_id}")
-            await asyncio.sleep(0.1) # Pausa de 0.1s para não sobrecarregar (limite de 30 msg/s)
+            await asyncio.sleep(0.1) 
         except Forbidden:
             print(f"Falha: Usuário {user_id} bloqueou o bot.")
         except ChatMigrated as e:
@@ -487,7 +508,6 @@ async def send_broadcast(bot: Bot, message: str):
 # Esta é a função alvo da THREAD 2 (BOT)
 def run_telegram_bot_thread(app: Application):
     """Função alvo da Thread: cria um loop asyncio e roda a lógica principal."""
-    # Cria um novo loop de eventos para esta thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
@@ -502,7 +522,6 @@ def run_telegram_bot_thread(app: Application):
 
         if current_commit and (current_commit != last_commit_sent):
             print("Detectado novo deploy! Enviando broadcast...")
-            # Roda o broadcast DENTRO do loop de eventos desta thread
             loop.run_until_complete(send_broadcast(app.bot, BROADCAST_MESSAGE))
             db.set_config("last_commit_hash", current_commit)
             print("Broadcast enviado e hash salvo.")
@@ -510,8 +529,6 @@ def run_telegram_bot_thread(app: Application):
             print("Inicialização normal (sem broadcast).")
 
         # 2. Inicia o polling (que gerencia seu próprio loop)
-        # O app.run_polling() é uma função síncrona que bloqueia
-        # a thread_bot, que é exatamente o que queremos.
         print("Iniciando Polling do bot...")
         app.run_polling(stop_signals=None) 
         
@@ -547,6 +564,11 @@ if __name__ == "__main__":
     else:
         app = Application.builder().token(TOKEN).build()
         app.add_handler(CommandHandler("start", start))
+        
+        # --- MODIFICAÇÃO AQUI ---
+        # Adiciona o novo handler para o broadcast manual
+        app.add_handler(CommandHandler("broadcast", broadcast_command)) 
+        
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
         print("🤖 Bot configurado.")
 
