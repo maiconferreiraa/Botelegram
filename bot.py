@@ -507,7 +507,6 @@ BROADCAST_MESSAGE = """
 🎉 **Atualização do Bot Finanças!** 🎉
 
 O bot foi atualizado com novas melhorias e correções. 
-*** Foi alterado o fuso horário GMT-3 ***
 (Para iniciar o bot envie /start novamente).
 
 Obrigado por usar!

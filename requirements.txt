@@ -1,8 +1,8 @@
 python-telegram-bot
-Flask
-waitress
 matplotlib
 openpyxl
 reportlab
-psycopg2-binary
+firebase-admin
 pytz
+flask
+waitress
